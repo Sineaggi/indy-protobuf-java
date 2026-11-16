@@ -37,6 +37,12 @@ final class Spinner {
 
   static final String OP_METHOD = "op";
 
+  /**
+   * Experimental: emit version-50 class files without StackMapTable, so the ClassFile API skips
+   * stack-map generation and HotSpot falls back to the type-inferencing verifier.
+   */
+  static final boolean NO_STACK_MAPS = Boolean.getBoolean("indyproto.noStackMaps");
+
   private final MethodHandles.Lookup lookup;
   private final ClassDesc msg;
   private final ClassDesc builder;
@@ -62,18 +68,25 @@ final class Spinner {
 
   MethodHandles.Lookup spinClass(String opName, ClassDesc superclass, Consumer<ClassBuilder> members) {
     ClassDesc self = ClassDesc.of(lookup.lookupClass().getName() + "$$Indy$" + opName);
-    ClassFile cf = ClassFile.of(ClassFile.ClassHierarchyResolverOption.of(
-        ClassHierarchyResolver.defaultResolver()
-            .orElse(ClassHierarchyResolver.ofClassLoading(lookup))));
+    ClassFile cf = NO_STACK_MAPS
+        ? ClassFile.of(ClassFile.StackMapsOption.DROP_STACK_MAPS)
+        : ClassFile.of(ClassFile.ClassHierarchyResolverOption.of(
+            ClassHierarchyResolver.defaultResolver()
+                .orElse(ClassHierarchyResolver.ofClassLoading(lookup))));
+    long t0 = System.nanoTime();
     byte[] bytes = cf.build(self, clb -> {
+      if (NO_STACK_MAPS) clb.withVersion(ClassFile.JAVA_6_VERSION, 0);
       clb.withFlags(AccessFlag.FINAL, AccessFlag.SYNTHETIC);
       clb.withSuperclass(superclass);
       members.accept(clb);
     });
+    long t1 = System.nanoTime();
     try {
       return lookup.defineHiddenClass(bytes, true, MethodHandles.Lookup.ClassOption.NESTMATE);
     } catch (IllegalAccessException e) {
       throw new IllegalStateException(e);
+    } finally {
+      Stats.spin(t1 - t0, System.nanoTime() - t1, bytes.length);
     }
   }
 

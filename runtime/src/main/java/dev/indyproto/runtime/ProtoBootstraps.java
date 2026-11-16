@@ -176,6 +176,16 @@ public final class ProtoBootstraps {
 
   public static CallSite bootstrap(Lookup lookup, String name, MethodType type, String encoded)
       throws Throwable {
+    long start = System.nanoTime();
+    try {
+      return bootstrap0(lookup, name, type, encoded);
+    } finally {
+      Stats.bootstrap(System.nanoTime() - start);
+    }
+  }
+
+  private static CallSite bootstrap0(Lookup lookup, String name, MethodType type, String encoded)
+      throws Throwable {
     Schema schema = Schema.decode(encoded);
     boolean builderSide = switch (name) {
       case "mergeFrom", "mergeFromMessage", "buildPartial", "clear" -> true;
@@ -191,8 +201,63 @@ public final class ProtoBootstraps {
       return new ConstantCallSite(mh.asType(type));
     }
 
+    if (PER_CLASS) {
+      Lookup ops = SPUN.computeIfAbsent(lookup.lookupClass(),
+          c -> spinAll(lookup, msgClass, schema, builderSide));
+      return new ConstantCallSite(ops.findStatic(ops.lookupClass(), name, type));
+    }
     Spinner sp = new Spinner(lookup, msgClass, schema);
-    BiConsumer<Spinner, CodeBuilder> gen = switch (name) {
+    Lookup hidden = sp.spin(name, type, cb -> generator(name).accept(sp, cb));
+    return new ConstantCallSite(hidden.findStatic(hidden.lookupClass(), Spinner.OP_METHOD, type));
+  }
+
+  /**
+   * {@code -Dindyproto.spin=per-class} (default): the first indy of a class spins one hidden class
+   * holding every operation of that side (message or builder). {@code per-op}: one hidden class
+   * per call site, so operations that are never called are never generated.
+   */
+  static final boolean PER_CLASS = !"per-op".equals(System.getProperty("indyproto.spin", "per-class"));
+
+  private static final ConcurrentHashMap<Class<?>, Lookup> SPUN = new ConcurrentHashMap<>();
+
+  private static final java.util.List<String> MESSAGE_OPS =
+      java.util.List.of("writeTo", "serializedSize", "equals", "hashCode");
+  private static final java.util.List<String> BUILDER_OPS =
+      java.util.List.of("mergeFrom", "mergeFromMessage", "buildPartial", "clear");
+
+  private static Lookup spinAll(Lookup lookup, Class<?> m, Schema schema, boolean builderSide) {
+    Class<?> b = builderSide ? lookup.lookupClass() : null;
+    Spinner sp = new Spinner(lookup, m, schema);
+    java.util.List<String> ops = builderSide ? BUILDER_OPS : MESSAGE_OPS;
+    if (!builderSide && STRATEGY.equals("mh")) ops = java.util.List.of();
+    java.util.List<String> todo = ops;
+    return sp.spinClass("Ops", clb -> {
+      for (String op : todo) {
+        MethodType t = opType(op, m, b);
+        clb.withMethodBody(op, t.describeConstable().orElseThrow(),
+            java.lang.classfile.ClassFile.ACC_PUBLIC | java.lang.classfile.ClassFile.ACC_STATIC,
+            cb -> generator(op).accept(sp, cb));
+      }
+    });
+  }
+
+  private static MethodType opType(String op, Class<?> m, Class<?> b) {
+    Class<?> cis = com.google.protobuf.CodedInputStream.class;
+    Class<?> cos = com.google.protobuf.CodedOutputStream.class;
+    Class<?> erl = com.google.protobuf.ExtensionRegistryLite.class;
+    return switch (op) {
+      case "writeTo" -> MethodType.methodType(void.class, m, cos);
+      case "serializedSize", "hashCode" -> MethodType.methodType(int.class, m);
+      case "equals" -> MethodType.methodType(boolean.class, m, m);
+      case "mergeFrom" -> MethodType.methodType(void.class, b, cis, erl);
+      case "mergeFromMessage", "buildPartial" -> MethodType.methodType(void.class, b, m);
+      case "clear" -> MethodType.methodType(void.class, b);
+      default -> throw new IllegalArgumentException(op);
+    };
+  }
+
+  private static BiConsumer<Spinner, CodeBuilder> generator(String name) {
+    return switch (name) {
       case "writeTo" -> Spinner::writeTo;
       case "serializedSize" -> Spinner::serializedSize;
       case "equals" -> Spinner::equals;
@@ -203,8 +268,6 @@ public final class ProtoBootstraps {
       case "clear" -> Spinner::clear;
       default -> throw new IllegalArgumentException("unknown op " + name);
     };
-    Lookup hidden = sp.spin(name, type, cb -> gen.accept(sp, cb));
-    return new ConstantCallSite(hidden.findStatic(hidden.lookupClass(), Spinner.OP_METHOD, type));
   }
 
   static void trace(String what, Class<?> c) {
