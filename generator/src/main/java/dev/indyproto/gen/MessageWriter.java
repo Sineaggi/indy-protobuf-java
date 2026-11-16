@@ -424,6 +424,13 @@ final class MessageWriter {
       clb.withField("serialVersionUID", CD.J, fb -> fb
           .withFlags(ClassFile.ACC_PRIVATE | ClassFile.ACC_STATIC | ClassFile.ACC_FINAL)
           .with(java.lang.classfile.attribute.ConstantValueAttribute.of(0L)));
+      // Java serialization (GeneratedMessageLite.SerializedForm.readResolve) finds the default
+      // instance reflectively through a static field with this exact name, so keep one. It is
+      // filled from the same condy constant that getDefaultInstance() returns.
+      clb.withField("DEFAULT_INSTANCE", m.msg,
+          ClassFile.ACC_PRIVATE | ClassFile.ACC_STATIC | ClassFile.ACC_FINAL);
+      clb.withMethodBody(ConstantDescs.CLASS_INIT_NAME, MTD_void, ClassFile.ACC_STATIC, cb -> cb
+          .ldc(defaultConst()).putstatic(m.msg, "DEFAULT_INSTANCE", m.msg).return_());
       for (int w = 0; w < m.schema.bitWords(); w++) {
         clb.withField("bitField" + w + "_", CD.I, ClassFile.ACC_PRIVATE);
       }
@@ -451,6 +458,8 @@ final class MessageWriter {
           cb.ldc(descriptorConst()).areturn());
       c.method("internalGetFieldAccessorTable", PROTECTED, mt(CD.GM_FIELD_ACCESSOR_TABLE), cb ->
           cb.ldc(tableConst()).areturn());
+      c.method("getDescriptorForType", PUBLIC, mt(CD.DESCRIPTOR), cb ->
+          cb.ldc(descriptorConst()).areturn());
 
       readAccessors(c, m.msg, false);
 
