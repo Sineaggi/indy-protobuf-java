@@ -1,0 +1,49 @@
+syntax = "proto3";
+
+package sample;
+
+option java_package = "sample";
+option java_outer_classname = "SampleProto";
+option java_multiple_files = true;
+
+enum Kind {
+  KIND_UNSPECIFIED = 0;
+  KIND_A = 1;
+  KIND_B = 2;
+}
+
+message Address {
+  string street = 1;
+  int32 zip = 2;
+  repeated string lines = 3;
+}
+
+message Person {
+  string name = 1;
+  int64 id = 2;
+  optional int32 age = 3;
+  Address address = 4;
+  repeated string tags = 5;
+  repeated int32 scores = 6;
+  Kind kind = 7;
+  repeated Address previous = 8;
+  bytes blob = 9;
+  double weight = 10;
+  bool active = 11;
+  repeated Kind kinds = 12;
+  float ratio = 13;
+  sint32 delta = 14;
+  fixed64 stamp = 15;
+  repeated double samples = 16;
+  repeated bytes chunks = 17;
+  optional string nickname = 18;
+  uint64 big = 19;
+  sfixed32 offset = 20;
+
+  message Note {
+    string text = 1;
+    Kind kind = 2;
+  }
+  repeated Note notes = 21;
+  Note pinned = 22;
+}
