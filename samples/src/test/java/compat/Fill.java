@@ -22,7 +22,9 @@ final class Fill {
       b.setField(d.findFieldByName("nanos"), r.nextInt(1_000_000_000));
       return b;
     }
-    for (FieldDescriptor f : b.getDescriptorForType().getFields()) {
+    java.util.List<FieldDescriptor> fields = new java.util.ArrayList<>(b.getDescriptorForType().getFields());
+    fields.addAll(extensionsOf(b.getDescriptorForType()));
+    for (FieldDescriptor f : fields) {
       if (f.isRepeated()) {
         int n = depth > 2 ? 0 : r.nextInt(4);
         // map keys stay distinct: a reflection-built map with duplicate keys keeps them all on the
@@ -33,12 +35,40 @@ final class Fill {
           if (f.isMapField() && !keys.add(((Message) v).getField(f.getMessageType().findFieldByNumber(1)))) continue;
           b.addRepeatedField(f, v);
         }
-      } else if (r.nextInt(4) != 0) {
-        if (f.getJavaType() == FieldDescriptor.JavaType.MESSAGE && depth > 2) continue;
+      } else if (mustSet(b, f) || r.nextInt(4) != 0) {
+        if (f.getJavaType() == FieldDescriptor.JavaType.MESSAGE && depth > 2 && !mustSet(b, f)) continue;
         b.setField(f, value(b, f, r, depth));
       }
     }
     return b;
+  }
+
+  /**
+   * Required fields, and map values (whose default may itself lack required fields), are always
+   * set, so build() succeeds. Uninitialized messages are covered by RequiredTest.
+   */
+  /** Extensions of {@code d} declared in its own file (file and message scope). */
+  static java.util.List<FieldDescriptor> extensionsOf(com.google.protobuf.Descriptors.Descriptor d) {
+    java.util.List<FieldDescriptor> out = new java.util.ArrayList<>();
+    if (d.toProto().getExtensionRangeCount() == 0) return out;
+    for (FieldDescriptor e : d.getFile().getExtensions()) if (e.getContainingType() == d) out.add(e);
+    for (var m : d.getFile().getMessageTypes()) {
+      for (FieldDescriptor e : m.getExtensions()) if (e.getContainingType() == d) out.add(e);
+    }
+    return out;
+  }
+
+  private static Message.Builder generatedBuilder(Message.Builder b, FieldDescriptor ext) {
+    try {
+      return Pairs.registry(b.getClass()).findImmutableExtensionByName(ext.getFullName())
+          .defaultInstance.newBuilderForType();
+    } catch (Exception e) {
+      throw new AssertionError(e);
+    }
+  }
+
+  private static boolean mustSet(Message.Builder b, FieldDescriptor f) {
+    return f.isRequired() || b.getDescriptorForType().getOptions().getMapEntry();
   }
 
   private static Object value(Message.Builder b, FieldDescriptor f, Random r, int depth) {
@@ -56,10 +86,13 @@ final class Fill {
       }
       case ENUM -> {
         EnumDescriptor e = f.getEnumType();
-        yield e.getValues().get(r.nextInt(e.getValues().size()));
+        // the canonical value of a number (generated enums collapse aliases; DynamicMessage does not)
+        yield e.findValueByNumber(e.getValues().get(r.nextInt(e.getValues().size())).getNumber());
       }
       case MESSAGE -> {
-        Message.Builder sub = b.newBuilderForField(f);
+        // newBuilderForField gives a DynamicMessage builder for message-typed extensions; use the
+        // generated type (as parsing with a registry would), so built and parsed copies compare
+        Message.Builder sub = f.isExtension() ? generatedBuilder(b, f) : b.newBuilderForField(f);
         yield fill(sub, r, depth + 1).build();
       }
     };

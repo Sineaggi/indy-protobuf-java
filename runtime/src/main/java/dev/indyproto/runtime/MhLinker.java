@@ -31,7 +31,9 @@ final class MhLinker {
   private MhLinker() {}
 
   private static final Lookup L = MethodHandles.lookup();
-  private static final Kind[] KINDS = Kind.values();
+  /** Indexed by {@link Schema.Field#wireKind()}: the kinds, then MESSAGE again for groups. */
+  private static final Kind[] KINDS = Rt.wireKinds();
+  private static final int GROUP = Schema.Field.GROUP_WIRE_KIND;
 
   static MethodHandle link(Lookup lookup, String name, MethodType type, Class<?> msgClass,
       Schema schema) throws Throwable {
@@ -157,7 +159,7 @@ final class MhLinker {
       if (f.inOneof()) {
         MethodHandle h = MethodHandles.insertArguments(
             rt("writeOneof", methodType(void.class, COS, int.class, int.class, Object.class)),
-            1, f.number(), f.kind().ordinal());
+            1, f.number(), f.wireKind());
         h = MethodHandles.filterArguments(h, 1, oneofValue(lookup, m, schema, f));
         h = MethodHandles.permuteArguments(h, leafType, 1, 0);
         MethodHandle test = MethodHandles.dropArguments(isCase(lookup, m, schema, f), 1, CodedOutputStream.class);
@@ -170,12 +172,12 @@ final class MhLinker {
         if (f.packed()) {
           MethodHandle memo = lookup.findGetter(m, f.memoFieldName(), int.class);
           // writePacked(out, tag, kind, list, dataSize) with list/size from m
-          MethodHandle h = MethodHandles.insertArguments(H_WRITE_PACKED, 1, f.packedTag(), f.kind().ordinal());
+          MethodHandle h = MethodHandles.insertArguments(H_WRITE_PACKED, 1, f.packedTag(), f.wireKind());
           h = MethodHandles.filterArguments(h, 1, g.asType(methodType(List.class, m)), memo);
           // (out, m, m) -> (m, out)
           w = MethodHandles.permuteArguments(h, leafType, 1, 0, 0);
         } else {
-          MethodHandle h = MethodHandles.insertArguments(H_WRITE_LIST, 1, f.number(), f.kind().ordinal());
+          MethodHandle h = MethodHandles.insertArguments(H_WRITE_LIST, 1, f.number(), f.wireKind());
           h = MethodHandles.filterArguments(h, 1, g.asType(methodType(List.class, m)));
           w = MethodHandles.permuteArguments(h, leafType, 1, 0);
         }
@@ -188,7 +190,7 @@ final class MhLinker {
           case 'I' -> H_WRITE_I;
           default -> H_WRITE_O;
         };
-        MethodHandle h = MethodHandles.insertArguments(base, 1, f.number(), f.kind().ordinal());
+        MethodHandle h = MethodHandles.insertArguments(base, 1, f.number(), f.wireKind());
         MethodHandle gg = base == H_WRITE_O ? g.asType(methodType(Object.class, m)) : g;
         h = MethodHandles.filterArguments(h, 1, gg);
         h = MethodHandles.permuteArguments(h, leafType, 1, 0);
@@ -221,7 +223,7 @@ final class MhLinker {
       if (f.inOneof()) {
         MethodHandle h = MethodHandles.insertArguments(
             rt("sizeOneof", methodType(int.class, int.class, int.class, Object.class)),
-            0, f.number(), f.kind().ordinal());
+            0, f.number(), f.wireKind());
         h = MethodHandles.filterArguments(h, 0, oneofValue(lookup, m, schema, f));
         leaves.add(MethodHandles.guardWithTest(isCase(lookup, m, schema, f), h, zero));
         continue;
@@ -232,7 +234,7 @@ final class MhLinker {
         MethodHandle list = g.asType(methodType(List.class, m));
         if (f.packed()) {
           MethodHandle data = MethodHandles.filterArguments(
-              MethodHandles.insertArguments(H_SIZE_LIST_NOTAG, 0, f.kind().ordinal()), 0, list);
+              MethodHandles.insertArguments(H_SIZE_LIST_NOTAG, 0, f.wireKind()), 0, list);
           MethodHandle setter = lookup.findSetter(m, f.memoFieldName(), int.class);
           MethodHandle store = MethodHandles.foldArguments(
               MethodHandles.dropArguments(MethodHandles.identity(int.class), 0, m), setter);
@@ -242,7 +244,7 @@ final class MhLinker {
               CodedOutputStream.computeTagSize(f.number())));
         } else {
           s = MethodHandles.filterArguments(
-              MethodHandles.insertArguments(H_SIZE_LIST, 0, f.number(), f.kind().ordinal()), 0, list);
+              MethodHandles.insertArguments(H_SIZE_LIST, 0, f.number(), f.wireKind()), 0, list);
         }
       } else {
         MethodHandle base = switch (f.kind().jvm) {
@@ -253,7 +255,7 @@ final class MhLinker {
           case 'I' -> H_SIZE_I;
           default -> H_SIZE_O;
         };
-        MethodHandle h = MethodHandles.insertArguments(base, 0, f.number(), f.kind().ordinal());
+        MethodHandle h = MethodHandles.insertArguments(base, 0, f.number(), f.wireKind());
         MethodHandle gg = base == H_SIZE_O ? g.asType(methodType(Object.class, m)) : g;
         h = MethodHandles.filterArguments(h, 0, gg);
         s = MethodHandles.guardWithTest(present(lookup, m, f), h,
@@ -263,6 +265,7 @@ final class MhLinker {
     }
     leaves.add(MethodHandles.filterArguments(H_UFS_SIZE, 0,
         lookup.findVirtual(m, "getUnknownFields", methodType(UnknownFieldSet.class))));
+    if (schema.extendable()) leaves.add(lookup.findVirtual(m, "$extSize", methodType(int.class)).asType(leafType));
     return balance(leaves, (a, b) -> MethodHandles.permuteArguments(
         MethodHandles.filterArguments(H_IADD, 0, a, b), leafType, 0, 0));
   }
@@ -309,7 +312,7 @@ final class MhLinker {
         MethodHandle v = oneofValue(lookup, m, schema, f);
         MethodHandle eq = MethodHandles.insertArguments(
             rt("eqOneof", methodType(boolean.class, int.class, Object.class, Object.class)),
-            0, f.kind().ordinal());
+            0, f.wireKind());
         eq = MethodHandles.filterArguments(eq, 0, v, v);
         leaves.add(MethodHandles.guardWithTest(
             MethodHandles.dropArguments(isCase(lookup, m, schema, f), 1, m), eq, t));
@@ -318,6 +321,9 @@ final class MhLinker {
     MethodHandle ufs = lookup.findVirtual(m, "getUnknownFields", methodType(UnknownFieldSet.class))
         .asType(methodType(Object.class, m));
     leaves.add(MethodHandles.filterArguments(H_EQ_O, 0, ufs, ufs));
+    if (schema.extendable()) {
+      leaves.add(lookup.findVirtual(m, "$extEquals", methodType(boolean.class, m)).asType(leafType));
+    }
     return balance(leaves, (a, b) -> MethodHandles.guardWithTest(a, b, fls));
   }
 
@@ -364,7 +370,7 @@ final class MhLinker {
     for (int i = 0; i < schema.oneofs().size(); i++) {
       for (Field f : schema.oneofMembers(i)) {
         MethodHandle vh = MethodHandles.filterArguments(MethodHandles.insertArguments(
-            rt("hashOneof", methodType(int.class, int.class, Object.class)), 0, f.kind().ordinal()),
+            rt("hashOneof", methodType(int.class, int.class, Object.class)), 0, f.wireKind()),
             0, oneofValue(lookup, m, schema, f));
         MethodHandle step = MethodHandles.filterArguments(
             MethodHandles.insertArguments(H_MIX, 1, f.number()), 1, vh);
@@ -374,6 +380,10 @@ final class MhLinker {
     }
     MethodHandle ufs = lookup.findVirtual(m, "getUnknownFields", methodType(UnknownFieldSet.class))
         .asType(methodType(Object.class, m));
+    if (schema.extendable()) {
+      MethodHandle ext = lookup.findVirtual(m, "$extHash", methodType(int.class, int.class));
+      steps.add(MethodHandles.permuteArguments(ext, methodType(int.class, int.class, m), 1, 0));
+    }
     steps.add(MethodHandles.filterArguments(H_MIX_UFS, 1,
         MethodHandles.filterReturnValue(ufs, H_HASH_O)));
     MethodHandle chain = balance(steps, (a, b) -> MethodHandles.permuteArguments(
@@ -463,6 +473,10 @@ final class MhLinker {
   static void writeZ(CodedOutputStream out, int n, int kind, boolean v) throws IOException { out.writeBool(n, v); }
 
   static void writeO(CodedOutputStream out, int n, int kind, Object v) throws IOException {
+    if (kind == GROUP) {
+      out.writeGroup(n, (MessageLite) v);
+      return;
+    }
     switch (KINDS[kind]) {
       case STRING -> Rt.writeString(out, n, v);
       case BYTES -> out.writeBytes(n, (ByteString) v);
@@ -543,6 +557,7 @@ final class MhLinker {
   static int sizeZ(int n, int kind, boolean v) { return CodedOutputStream.computeBoolSize(n, v); }
 
   static int sizeO(int n, int kind, Object v) {
+    if (kind == GROUP) return CodedOutputStream.computeGroupSize(n, (MessageLite) v);
     return switch (KINDS[kind]) {
       case STRING -> Rt.computeStringSize(n, v);
       case BYTES -> CodedOutputStream.computeBytesSize(n, (ByteString) v);
@@ -552,6 +567,7 @@ final class MhLinker {
   }
 
   static int sizeNoTag(int kind, Object element) {
+    if (kind == GROUP) return ((MessageLite) element).getSerializedSize();
     return switch (KINDS[kind]) {
       case STRING -> Rt.computeStringSizeNoTag(element);
       case BYTES -> CodedOutputStream.computeBytesSizeNoTag((ByteString) element);
@@ -605,7 +621,8 @@ final class MhLinker {
   }
 
   static int sizeList(int n, int kind, List<?> list) {
-    return sizeListNoTag(kind, list) + list.size() * CodedOutputStream.computeTagSize(n);
+    int tags = kind == GROUP ? 2 : 1;
+    return sizeListNoTag(kind, list) + tags * list.size() * CodedOutputStream.computeTagSize(n);
   }
 
   static int packedTotal(int tagSize, int data) {

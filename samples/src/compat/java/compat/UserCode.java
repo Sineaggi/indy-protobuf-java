@@ -22,6 +22,10 @@ import @PKG@shapes.Shape;
 import @PKG@shapes.ShapeOrBuilder;
 import @PKG@shapes.Shapes2;
 import @PKG@shapes.Unit;
+import @PKG@shapes.ext.Ext2;
+import @PKG@shapes.full.Full2;
+import com.google.protobuf.ExtensionRegistry;
+import com.google.protobuf.UninitializedMessageException;
 import java.util.Map;
 import java.util.TreeMap;
 
@@ -119,7 +123,67 @@ public final class UserCode {
     log.add("json=" + JsonFormat.printer().omittingInsignificantWhitespace().print(batch.getEvents(1)));
     log.add("text=" + p.getPinned().toString().trim());
     shapes(log);
+    proto2(log);
     return log;
+  }
+
+  private static void proto2(List<String> log) throws IOException {
+    Full2.Full d = Full2.Full.getDefaultInstance();
+    log.add("defaults n=" + d.getN() + " s=" + d.getS() + " b=" + d.getB().size() + " d=" + d.getD() + " f=" + d.getF()
+        + " c=" + d.getC() + " t=" + d.getT() + " u=" + d.getU() + " neg=" + d.getNeg() + " nan=" + Double.isNaN(d.getNan())
+        + " pi=" + d.getPi() + " ps=" + d.getPs() + " pc=" + d.getPc() + " hasN=" + d.hasN());
+    log.add("aliases " + (Full2.Color.CRIMSON == Full2.Color.RED) + " " + Full2.Color.NAVY + " " + Full2.Color.NAVY_VALUE
+        + " " + java.util.Arrays.toString(Full2.Color.values()));
+    Full2.Full.Builder fb = Full2.Full.newBuilder().setN(1).setC(Full2.Color.CRIMSON);
+    log.add("initialized=" + fb.isInitialized() + " errors=" + fb.findInitializationErrors());
+    try {
+      fb.build();
+    } catch (UninitializedMessageException e) {
+      log.add("build -> " + e.getMessage());
+    }
+    fb.getGBuilder().setGv(1);
+    fb.setName("n")
+        .addR(Full2.Full.R.newBuilder().setRv("r1")).addRBuilder().setRv("r2");
+    log.add("missing greq: " + fb.findInitializationErrors());
+    fb.getGBuilder().setGreq(2);
+    fb.setPG(Full2.Full.PG.newBuilder().setPgv(9));
+    Full2.Full full = fb.build();
+    log.add("full g=" + full.getG().getGreq() + " r=" + full.getRCount() + " pick=" + full.getPickCase() + " pg=" + full.getPG().getPgv()
+        + " c=" + full.getC());
+    Full2.Full back = Full2.Full.parseFrom(full.toByteArray());
+    log.add("group round trip=" + back.equals(full) + " cleared n=" + back.toBuilder().clearN().getN()
+        + " cleared s=" + back.toBuilder().setS("x").clearS().getS());
+    try {
+      Full2.Full.parseFrom(Full2.Full.newBuilder().setN(3).buildPartial().toByteArray());
+    } catch (InvalidProtocolBufferException e) {
+      log.add("parse uninitialized -> " + e.getMessage() + " unfinished=" + e.getUnfinishedMessage().getSerializedSize());
+    }
+
+    Ext2.Base base = Ext2.Base.newBuilder()
+        .setA(1)
+        .setExtension(Ext2.eInt, 7)
+        .addExtension(Ext2.eStrs, "x").addExtension(Ext2.eStrs, "y")
+        .setExtension(Ext2.eMsg, Full2.Inner.newBuilder().setV(3).build())
+        .setExtension(Ext2.eColor, Full2.Color.GREEN)
+        .setExtension(Ext2.Scope.back, Ext2.Scope.newBuilder().setX(5).build())
+        .addExtension(Ext2.Scope.colors, Full2.Color.BLUE)
+        .setB("b")
+        .build();
+    log.add("ext int=" + base.getExtension(Ext2.eInt) + " strs=" + base.getExtension(Ext2.eStrs) + " count=" + base.getExtensionCount(Ext2.eStrs)
+        + " msg=" + base.getExtension(Ext2.eMsg).getV() + " color=" + base.getExtension(Ext2.eColor)
+        + " back=" + base.getExtension(Ext2.Scope.back).getX() + " has str=" + base.hasExtension(Ext2.eStr)
+        + " str default=" + base.getExtension(Ext2.eStr) + " numbers " + Ext2.E_INT_FIELD_NUMBER + "," + Ext2.Scope.BACK_FIELD_NUMBER);
+    ExtensionRegistry reg = ExtensionRegistry.newInstance();
+    Ext2.registerAllExtensions(reg);
+    Ext2.Base parsed = Ext2.Base.parseFrom(base.toByteArray(), reg);
+    Ext2.Base noReg = Ext2.Base.parseFrom(base.toByteArray());
+    log.add("ext parsed equal=" + parsed.equals(base) + " without registry=" + noReg.equals(base)
+        + " unknown=" + noReg.getUnknownFields().asMap().keySet() + " bytes same=" + java.util.Arrays.equals(noReg.toByteArray(), base.toByteArray()));
+    log.add("ext cleared=" + parsed.toBuilder().clearExtension(Ext2.eInt).build().hasExtension(Ext2.eInt)
+        + " set index=" + parsed.toBuilder().setExtension(Ext2.eStrs, 1, "z").build().getExtension(Ext2.eStrs, 1));
+    log.add("ext text=" + base.toString().replace('\n', ' '));
+    Ext2.ReqExt r = Ext2.ReqExt.newBuilder().setExtension(Ext2.reqInner, Full2.Inner.newBuilder().buildPartial()).buildPartial();
+    log.add("ext required initialized=" + r.isInitialized() + " " + r.findInitializationErrors());
   }
 
   private static void shapes(List<String> log) throws IOException {

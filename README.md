@@ -38,4 +38,4 @@ bench/scripts/jmh.sh                     # steady-state JMH -> bench/build/jmh/
 
 ## Not supported yet
 
-Extensions, groups, `required`, custom defaults, enum aliases, and protobuf-javalite/Android.
+`message_set_wire_format`, and protobuf-javalite/Android. With `-Dindyproto.strategy=mh`, `writeTo` of extendable messages is still spun as a hidden class, because the extension serializer is a cursor shared across field writes.

@@ -1,0 +1,62 @@
+// proto2 completeness: required fields, [default = ...], enum aliases, groups.
+syntax = "proto2";
+
+package full2;
+
+option java_package = "shapes.full";
+
+enum Color {
+  option allow_alias = true;
+  RED = 1;
+  CRIMSON = 1;
+  BLUE = 2;
+  NAVY = 2;
+  GREEN = 3;
+}
+
+message Inner {
+  required int32 v = 1;
+  optional string note = 2;
+}
+
+message Full {
+  required string name = 1;
+  optional int32 n = 2 [default = 42];
+  optional string s = 3 [default = "hi\n\303\251 \"q\""];
+  optional bytes b = 4 [default = "\001\002\377"];
+  optional double d = 5 [default = inf];
+  optional float f = 6 [default = -1.5];
+  optional Color c = 7 [default = NAVY];
+  optional bool t = 8 [default = true];
+  optional uint64 u = 9 [default = 18446744073709551615];
+  optional sint64 neg = 20 [default = -7];
+  optional double nan = 21 [default = nan];
+  optional group G = 10 {
+    optional int32 gv = 11;
+    required int32 greq = 12;
+  }
+  repeated group R = 13 {
+    optional string rv = 14;
+    optional Inner ri = 15;
+  }
+  optional Inner inner = 16;
+  repeated Inner inners = 17;
+  map<string, Inner> m = 18;
+  repeated Color colors = 19;
+  oneof pick {
+    int32 pi = 30 [default = 5];
+    string ps = 31 [default = "dflt"];
+    group PG = 32 {
+      optional int32 pgv = 33;
+    }
+    Color pc = 34 [default = GREEN];
+  }
+}
+
+// no required fields anywhere: isInitialized is constant true
+message Plain {
+  optional int32 x = 1 [default = 3];
+  repeated group Items = 2 {
+    optional int32 id = 3;
+  }
+}

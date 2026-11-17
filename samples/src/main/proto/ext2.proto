@@ -1,0 +1,47 @@
+// proto2 extensions: file and message scope, several ranges interleaved with fields.
+syntax = "proto2";
+
+package ext2;
+
+import "full2.proto";
+
+option java_package = "shapes.ext";
+
+message Base {
+  optional int32 a = 1;
+  extensions 10 to 19;
+  optional string b = 20;
+  repeated int32 c = 21;
+  extensions 100 to max;
+}
+
+extend Base {
+  optional int32 e_int = 10;
+  repeated string e_strs = 11;
+  optional full2.Inner e_msg = 12;
+  optional full2.Color e_color = 13 [default = BLUE];
+  repeated sint64 e_packed = 14 [packed = true];
+  optional group EGroup = 15 {
+    optional int32 g = 1;
+  }
+  optional bytes e_bytes = 100;
+  optional string e_str = 536870911 [default = "far"];
+}
+
+message Scope {
+  extend Base {
+    optional Scope back = 101;
+    repeated full2.Color colors = 102;
+  }
+  optional int32 x = 1;
+  optional Base base = 2;
+}
+
+// extensions only, one of them with required fields: isInitialized checks extensions
+message ReqExt {
+  extensions 1 to 10;
+}
+
+extend ReqExt {
+  optional full2.Inner req_inner = 1;
+}

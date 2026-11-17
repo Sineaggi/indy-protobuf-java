@@ -209,7 +209,18 @@ final class Spinner {
 
   void writeTo(CodeBuilder cb) {
     int m = 0, out = 1;
-    for (Field f : schema.fields()) {
+    int ext = -1;
+    if (schema.extendable()) {
+      ext = cb.allocateLocal(TypeKind.REFERENCE);
+      cb.aload(m).invokevirtual(msg, "$extWriter", mt(CD_Object)).astore(ext);
+    }
+    for (Object item : schema.wireOrder()) {
+      if (item instanceof Schema.Range r) {
+        cb.aload(m).aload(ext).loadConstant(r.end()).aload(out)
+            .invokevirtual(msg, "$extWriteUntil", mt(CD.V, CD_Object, CD.I, CD.COS));
+        continue;
+      }
+      Field f = (Field) item;
       Label skip = cb.newLabel();
       if (f.isMap()) {
         cb.aload(out).loadConstant(f.number()).loadConstant(f.mapKey().ordinal());
@@ -218,7 +229,7 @@ final class Spinner {
         cb.invokestatic(CD.RT, "writeMap", mt(CD.V, CD.COS, CD.I, CD.I, CD.MAP_FIELD, CD.MAP_ENTRY));
       } else if (f.inOneof()) {
         ifNotCase(cb, msg, m, f, skip);
-        cb.aload(out).loadConstant(f.number()).loadConstant(f.kind().ordinal());
+        cb.aload(out).loadConstant(f.number()).loadConstant(f.wireKind());
         oneofValue(cb, msg, m, f);
         cb.invokestatic(CD.RT, "writeOneof", mt(CD.V, CD.COS, CD.I, CD.I, CD_Object));
       } else if (f.repeated()) {
@@ -265,7 +276,7 @@ final class Spinner {
     switch (f.kind()) {
       case STRING -> cb.invokestatic(CD.RT, "writeString", mt(CD.V, CD.COS, CD.I, CD_Object));
       case BYTES -> cb.invokevirtual(CD.COS, "writeBytes", mt(CD.V, CD.I, CD.BYTE_STRING));
-      case MESSAGE -> cb.invokevirtual(CD.COS, "writeMessage", mt(CD.V, CD.I, CD.MESSAGE_LITE));
+      case MESSAGE -> cb.invokevirtual(CD.COS, "write" + f.messageIo(), mt(CD.V, CD.I, CD.MESSAGE_LITE));
       default -> cb.invokevirtual(CD.COS, "write" + f.kind().io, mt(CD.V, CD.I, f.kind().valueDesc()));
     }
   }
@@ -287,7 +298,7 @@ final class Spinner {
             .iadd().istore(size);
       } else if (f.inOneof()) {
         ifNotCase(cb, msg, m, f, skip);
-        cb.iload(size).loadConstant(f.number()).loadConstant(f.kind().ordinal());
+        cb.iload(size).loadConstant(f.number()).loadConstant(f.wireKind());
         oneofValue(cb, msg, m, f);
         cb.invokestatic(CD.RT, "sizeOneof", mt(CD.I, CD.I, CD.I, CD_Object)).iadd().istore(size);
       } else if (f.repeated()) {
@@ -297,7 +308,7 @@ final class Spinner {
           forEach(cb, f, c -> getField(c, msg, m, f), (list, i) -> {
             cb.iload(data).loadConstant(f.number()).aload(list);
             listGet(cb, f, i);
-            cb.invokestatic(CD.COS, "computeMessageSize", mt(CD.I, CD.I, CD.MESSAGE_LITE));
+            cb.invokestatic(CD.COS, "compute" + f.messageIo() + "Size", mt(CD.I, CD.I, CD.MESSAGE_LITE));
             cb.iadd().istore(data);
           });
           cb.iload(size).iload(data).iadd().istore(size);
@@ -340,13 +351,16 @@ final class Spinner {
         switch (f.kind()) {
           case STRING -> cb.invokestatic(CD.RT, "computeStringSize", mt(CD.I, CD.I, CD_Object));
           case BYTES -> cb.invokestatic(CD.COS, "computeBytesSize", mt(CD.I, CD.I, CD.BYTE_STRING));
-          case MESSAGE -> cb.invokestatic(CD.COS, "computeMessageSize", mt(CD.I, CD.I, CD.MESSAGE_LITE));
+          case MESSAGE -> cb.invokestatic(CD.COS, "compute" + f.messageIo() + "Size", mt(CD.I, CD.I, CD.MESSAGE_LITE));
           default -> cb.invokestatic(CD.COS, "compute" + f.kind().io + "Size",
               mt(CD.I, CD.I, f.kind().valueDesc()));
         }
         cb.iadd().istore(size);
       }
       cb.labelBinding(skip);
+    }
+    if (schema.extendable()) {
+      cb.iload(size).aload(m).invokevirtual(msg, "$extSize", mt(CD.I)).iadd().istore(size);
     }
     cb.iload(size).aload(m).invokevirtual(msg, "getUnknownFields", mt(CD.UNKNOWN_FIELD_SET))
         .invokevirtual(CD.UNKNOWN_FIELD_SET, "getSerializedSize", mt(CD.I)).iadd().ireturn();
@@ -432,7 +446,7 @@ final class Spinner {
       for (Field f : schema.oneofMembers(i)) {
         Label next = cb.newLabel();
         ifNotCase(cb, msg, a, f, next);
-        cb.loadConstant(f.kind().ordinal());
+        cb.loadConstant(f.wireKind());
         oneofValue(cb, msg, a, f);
         oneofValue(cb, msg, b, f);
         cb.invokestatic(CD.RT, "eqOneof", mt(CD.Z, CD.I, CD_Object, CD_Object)).ifeq(notEqual);
@@ -442,6 +456,9 @@ final class Spinner {
     cb.aload(a).invokevirtual(msg, "getUnknownFields", mt(CD.UNKNOWN_FIELD_SET))
         .aload(b).invokevirtual(msg, "getUnknownFields", mt(CD.UNKNOWN_FIELD_SET))
         .invokevirtual(CD.UNKNOWN_FIELD_SET, "equals", mt(CD.Z, CD_Object)).ifeq(notEqual);
+    if (schema.extendable()) {
+      cb.aload(a).aload(b).invokevirtual(msg, "$extEquals", mt(CD.Z, msg)).ifeq(notEqual);
+    }
     cb.iconst_1().ireturn();
     cb.labelBinding(notEqual);
     cb.iconst_0().ireturn();
@@ -509,11 +526,14 @@ final class Spinner {
         Label skip = cb.newLabel();
         ifNotCase(cb, msg, m, f, skip);
         cb.loadConstant(53).loadConstant(37).iload(h).imul().loadConstant(f.number()).iadd().imul();
-        cb.loadConstant(f.kind().ordinal());
+        cb.loadConstant(f.wireKind());
         oneofValue(cb, msg, m, f);
         cb.invokestatic(CD.RT, "hashOneof", mt(CD.I, CD.I, CD_Object)).iadd().istore(h);
         cb.labelBinding(skip);
       }
+    }
+    if (schema.extendable()) {
+      cb.aload(m).iload(h).invokevirtual(msg, "$extHash", mt(CD.I, CD.I)).istore(h);
     }
     cb.loadConstant(29).iload(h).imul()
         .aload(m).invokevirtual(msg, "getUnknownFields", mt(CD.UNKNOWN_FIELD_SET))
@@ -646,8 +666,15 @@ final class Spinner {
       int iv, int lv, int fv, int dv, int ov, Label afterUnknownEnum) {
     Kind k = f.kind();
     if (k == Kind.MESSAGE) {
-      cb.aload(in).invokestatic(f.typeDesc(), "parser", mt(CD.PARSER)).aload(reg)
-          .invokevirtual(CD.CIS, "readMessage", mt(CD.MESSAGE_LITE, CD.PARSER, CD.ERL))
+      cb.aload(in);
+      if (f.group()) cb.loadConstant(f.number());
+      cb.invokestatic(f.typeDesc(), "parser", mt(CD.PARSER)).aload(reg);
+      if (f.group()) {
+        cb.invokevirtual(CD.CIS, "readGroup", mt(CD.MESSAGE_LITE, CD.I, CD.PARSER, CD.ERL));
+      } else {
+        cb.invokevirtual(CD.CIS, "readMessage", mt(CD.MESSAGE_LITE, CD.PARSER, CD.ERL));
+      }
+      cb
           .checkcast(f.typeDesc()).astore(ov);
       cb.aload(b).aload(ov)
           .invokevirtual(builder, (f.repeated() ? "add" : "merge") + f.camelName(),
@@ -794,6 +821,9 @@ final class Spinner {
         if (f.presence()) setBit(cb, builder, b, f);
       }
       cb.labelBinding(skip);
+    }
+    if (schema.extendable()) {
+      cb.aload(b).aload(o).invokevirtual(builder, "$mergeExtensions", mt(CD.V, msg));
     }
     cb.aload(b).aload(o).invokevirtual(msg, "getUnknownFields", mt(CD.UNKNOWN_FIELD_SET))
         .invokevirtual(builder, "mergeUnknownFields", mt(CD.GM_BUILDER, CD.UNKNOWN_FIELD_SET)).pop();
@@ -945,7 +975,12 @@ final class Spinner {
         continue;
       }
       cb.aload(b);
-      pushDefault(cb, f);
+      if (f.customDefault()) {
+        // [default = ...]: the default instance holds it (set by the message's constructor)
+        cb.invokestatic(msg, "getDefaultInstance", mt(msg)).getfield(msg, f.fieldName(), f.storageDesc());
+      } else {
+        pushDefault(cb, f);
+      }
       cb.putfield(builder, f.fieldName(), f.storageDesc());
     }
     cb.return_();

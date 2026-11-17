@@ -33,6 +33,13 @@ public final class CD {
   }
 
   public static final ClassDesc BYTE_STRING = pb("ByteString");
+  public static final ClassDesc MESSAGE_LITE_OR_BUILDER = pb("MessageLiteOrBuilder");
+  public static final ClassDesc EXTENDABLE_MESSAGE = pb("GeneratedMessage$ExtendableMessage");
+  public static final ClassDesc EXTENDABLE_BUILDER = pb("GeneratedMessage$ExtendableBuilder");
+  public static final ClassDesc EXTENDABLE_MESSAGE_OR_BUILDER = pb("GeneratedMessage$ExtendableMessageOrBuilder");
+  public static final ClassDesc EXTENSION_SERIALIZER = pb("GeneratedMessage$ExtendableMessage$ExtensionSerializer");
+  public static final ClassDesc GENERATED_EXTENSION = pb("GeneratedMessage$GeneratedExtension");
+  public static final ClassDesc FIELD_DESCRIPTOR = pb("Descriptors$FieldDescriptor");
   public static final ClassDesc CIS = pb("CodedInputStream");
   public static final ClassDesc COS = pb("CodedOutputStream");
   public static final ClassDesc ERL = pb("ExtensionRegistryLite");

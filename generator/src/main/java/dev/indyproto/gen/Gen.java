@@ -236,8 +236,16 @@ public final class Gen {
           .aload(0).invokespecial(CD.GENERATED_FILE, INIT_NAME, MTD_void).return_());
       clb.withMethodBody("getDescriptor", mt(CD.FILE_DESCRIPTOR), ClassFile.ACC_PUBLIC | ClassFile.ACC_STATIC,
           cb -> cb.ldc(fileConst).areturn());
+      Extensions ex = new Extensions(names);
+      for (var ext : fd.getExtensions()) ex.declare(clb, ext);
+      if (!fd.getExtensions().isEmpty()) {
+        clb.withMethodBody(ConstantDescs.CLASS_INIT_NAME, MTD_void, ClassFile.ACC_STATIC, cb -> {
+          ex.initFileScoped(cb, outer, fd.getExtensions());
+          cb.return_();
+        });
+      }
       clb.withMethodBody("registerAllExtensions", mt(CD.V, CD.ERL), ClassFile.ACC_PUBLIC | ClassFile.ACC_STATIC,
-          cb -> cb.return_());
+          cb -> ex.registerAll(cb, fd, outer));
       clb.withMethodBody("registerAllExtensions", mt(CD.V, CD.ER), ClassFile.ACC_PUBLIC | ClassFile.ACC_STATIC,
           cb -> cb.aload(0).invokestatic(outer, "registerAllExtensions", mt(CD.V, CD.ERL)).return_());
     });

@@ -141,7 +141,8 @@ final class OneofMapWriter {
           cb.labelBinding(skip);
           cb.aload(s).areturn();
           cb.labelBinding(set);
-          cb.ldc("").areturn();
+          if (f.s().customDefault()) MessageWriter.pushCustomDefault(cb, f); else cb.ldc("");
+          cb.areturn();
         }));
         c.method("get" + cap + "Bytes", flags, mt(CD.BYTE_STRING), MessageWriter.body(iface, cb -> {
           Label set = cb.newLabel();
@@ -152,11 +153,17 @@ final class OneofMapWriter {
           cb.aload(0).aload(r).putfield(owner, o.valueField(), CD_Object);
           cb.aload(r).areturn();
           cb.labelBinding(set);
-          cb.getstatic(CD.BYTE_STRING, "EMPTY", CD.BYTE_STRING).areturn();
+          if (f.s().customDefault()) {
+            cb.ldc((String) f.fd().getDefaultValue()).invokestatic(CD.BYTE_STRING, "copyFromUtf8", mt(CD.BYTE_STRING, CD.STRING));
+          } else {
+            cb.getstatic(CD.BYTE_STRING, "EMPTY", CD.BYTE_STRING);
+          }
+          cb.areturn();
         }));
       }
       case ENUM -> {
-        int dflt = f.fd().getEnumType().getValues().get(0).getNumber();
+        var dfltValue = (com.google.protobuf.Descriptors.EnumValueDescriptor) f.fd().getDefaultValue();
+        int dflt = dfltValue.getNumber();
         if (f.openEnum()) {
           c.method("get" + cap + "Value", flags, mt(CD.I), MessageWriter.body(iface, cb -> {
             Label no = cb.newLabel();
@@ -176,7 +183,7 @@ final class OneofMapWriter {
           w.enumFromNumber(cb, f);
           cb.areturn();
           cb.labelBinding(no);
-          cb.getstatic(f.type(), f.fd().getEnumType().getValues().get(0).getName(), f.type()).areturn();
+          cb.getstatic(f.type(), dfltValue.getName(), f.type()).areturn();
         }));
       }
       case MESSAGE -> {
@@ -213,7 +220,9 @@ final class OneofMapWriter {
           unbox(cb, t);
           cb.return_(TypeKind.from(t));
           cb.labelBinding(no);
-          if (f.kind() == Kind.BYTES) {
+          if (f.s().customDefault()) {
+            MessageWriter.pushCustomDefault(cb, f);
+          } else if (f.kind() == Kind.BYTES) {
             cb.getstatic(CD.BYTE_STRING, "EMPTY", CD.BYTE_STRING);
           } else {
             switch (t.descriptorString()) {
