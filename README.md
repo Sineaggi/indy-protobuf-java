@@ -15,7 +15,7 @@ The goal is drop-in compatibility with protoc 4.36.2 Java gencode on the full ru
 | Module | Contents |
 | --- | --- |
 | `runtime` | `ProtoBootstraps` (indy and condy bootstraps), `Spinner` (hidden-class codegen), `MhLinker` (MethodHandle-combinator strategy), `Rt`, `Schema`, `Stats` |
-| `generator` | `Gen` CLI: `--descriptor-set set.pb --out DIR [--rewrite from=to] [files...]` |
+| `generator` | `protoc-gen-indy` protoc plugin (`Plugin`), and the `Gen` CLI: `--descriptor-set set.pb --out DIR [--rewrite from=to] [files...]` |
 | `samples` | Test protos, the protoc and indy generation pipeline, and the compatibility tests |
 | `bench` | JMH, the startup harness, the size report |
 
@@ -29,6 +29,21 @@ bench/scripts/startup.sh 7               # startup, metaspace, AOT cache (median
 bench/scripts/jmh.sh                     # steady-state JMH -> bench/build/jmh/
 ```
 
+## Running as a protoc plugin
+
+`./gradlew :generator:protocGenJar` builds a self-contained `generator/build/protoc-gen/protoc-gen-indy.jar`. `./gradlew :generator:installDist` also puts `protoc-gen-indy` and `protoc-gen-indy.bat` launchers in `generator/build/install/generator/bin/`. Point protoc at either one:
+
+```sh
+protoc --plugin=protoc-gen-indy=generator/build/install/generator/bin/protoc-gen-indy \
+       --indy_out=build/classes foo.proto            # .class files under build/classes
+protoc --plugin=... --indy_out=build/foo-indy.jar foo.proto   # protoc writes the jar itself
+protoc --plugin=... --indy_opt=rewrite=com.foo=indy.com.foo --indy_out=... foo.proto
+```
+
+The plugin writes compiled classes, not Java sources, so its output goes on the classpath next to `runtime` and protobuf-java, with no compile step. As with `--java_out`, it generates only the files named on the command line, not their imports. The only option is `rewrite=FROM=TO` (repeatable, comma separated), which moves a Java package. Editions files are refused by protoc, because the plugin doesn't declare editions support.
+
+The samples build generates its indy classes this way, and `:samples:check` verifies that the `Gen` CLI produces byte-identical classes.
+
 ## Runtime flags
 
 - `-Dindyproto.strategy=hidden|mh`: link by spinning hidden classes (the default), or by MethodHandle combinators for write, size, equals and hashCode
@@ -38,6 +53,6 @@ bench/scripts/jmh.sh                     # steady-state JMH -> bench/build/jmh/
 
 `message_set_wire_format` messages hold only extensions, so their `writeTo` and `getSerializedSize` are emitted directly, as protoc does, with no call site to link.
 
-## Not supported yet
+## Not supported
 
-protobuf-javalite/Android. With `-Dindyproto.strategy=mh`, `writeTo` of extendable messages is still spun as a hidden class, because the extension serializer is a cursor shared across field writes.
+protobuf-javalite/Android is out of scope: the generated classes need JDK 25 (`java.lang.classfile` at link time, hidden classes), which Android doesn't provide. With `-Dindyproto.strategy=mh`, `writeTo` of extendable messages is still spun as a hidden class, because the extension serializer is a cursor shared across field writes.
