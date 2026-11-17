@@ -171,6 +171,47 @@ public final class ProtoBootstraps {
     };
   }
 
+  /**
+   * The default MapEntry of map field {@code number} of {@code msgClass}. Only the message's
+   * private static {@code $fooEntry()} loads this constant, so there is one entry per field.
+   */
+  @SuppressWarnings({"rawtypes", "unchecked"})
+  public static com.google.protobuf.MapEntry<?, ?> mapEntry(Lookup lookup, String name,
+      Class<?> type, Class<?> msgClass, int number, Class<?> valueClass) throws Throwable {
+    Descriptor d = (Descriptor) lookup.findStatic(msgClass, "getDescriptor",
+        MethodType.methodType(Descriptor.class)).invoke();
+    Descriptor entry = d.findFieldByNumber(number).getMessageType();
+    com.google.protobuf.Descriptors.FieldDescriptor k = entry.findFieldByNumber(1);
+    com.google.protobuf.Descriptors.FieldDescriptor v = entry.findFieldByNumber(2);
+    Object dv = switch (v.getJavaType()) {
+      case MESSAGE -> lookup.findStatic(valueClass, "getDefaultInstance",
+          MethodType.methodType(valueClass)).invoke();
+      case ENUM -> ((com.google.protobuf.Descriptors.EnumValueDescriptor) v.getDefaultValue()).getNumber();
+      default -> v.getDefaultValue();
+    };
+    trace("condy mapEntry " + number, msgClass);
+    return com.google.protobuf.MapEntry.newDefaultInstance(entry, k.getLiteType(),
+        k.getDefaultValue(), v.getLiteType(), dv);
+  }
+
+  /** The MapFieldBuilder converter for a map of messages; {@code entryMethod} is on the message. */
+  public static com.google.protobuf.MapFieldBuilder.Converter<?, ?, ?> mapConverter(Lookup lookup,
+      String name, Class<?> type, Class<?> msgClass, String entryMethod) throws Throwable {
+    Object entry = lookup.findStatic(msgClass, entryMethod,
+        MethodType.methodType(com.google.protobuf.MapEntry.class)).invoke();
+    return new Rt.MessageMapConverter((com.google.protobuf.MapEntry<?, ?>) entry);
+  }
+
+  /** Converter between enum numbers and constants for maps with enum values. */
+  @SuppressWarnings({"rawtypes", "unchecked"})
+  public static Internal.MapAdapter.Converter<?, ?> mapEnumConverter(Lookup lookup, String name,
+      Class<?> type, Class<?> enumClass, String unrecognized) throws Throwable {
+    Internal.EnumLiteMap values = (Internal.EnumLiteMap) lookup.findStatic(enumClass,
+        "internalGetValueMap", MethodType.methodType(Internal.EnumLiteMap.class)).invoke();
+    Object fallback = lookup.findStaticGetter(enumClass, unrecognized, enumClass).invoke();
+    return Internal.MapAdapter.newEnumConverter(values, (Internal.EnumLite) fallback);
+  }
+
   // ==============================================================================================
   // indy
 

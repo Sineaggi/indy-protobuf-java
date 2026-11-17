@@ -12,7 +12,8 @@ final class Pairs {
   static final List<String> MESSAGES = List.of(
       "sample.Person", "sample.Address", "sample.Person$Note",
       "sample.legacy.Legacy$Event", "sample.legacy.Legacy$Batch",
-      "bench.Order", "bench.LineItem", "wide.Wide", "many.M0", "many.M399");
+      "bench.Order", "bench.LineItem", "wide.Wide", "many.M0", "many.M399",
+      "shapes.Shape", "shapes.Point", "shapes.Shapes2$Legacy");
 
   static Stream<String> messages() {
     return MESSAGES.stream();

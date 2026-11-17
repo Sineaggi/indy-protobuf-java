@@ -65,6 +65,17 @@ public final class CD {
   public static final ClassDesc ENUM_VALUE_DESCRIPTOR = pb("Descriptors$EnumValueDescriptor");
   public static final ClassDesc PROTOCOL_MESSAGE_ENUM = pb("ProtocolMessageEnum");
 
+  public static final ClassDesc MAP_FIELD = pb("MapField");
+  public static final ClassDesc MAP_FIELD_BUILDER = pb("MapFieldBuilder");
+  public static final ClassDesc MAP_FIELD_BUILDER_CONVERTER = pb("MapFieldBuilder$Converter");
+  public static final ClassDesc MAP_ENTRY = pb("MapEntry");
+  public static final ClassDesc MAP_ADAPTER = pb("Internal$MapAdapter");
+  public static final ClassDesc MAP_ADAPTER_CONVERTER = pb("Internal$MapAdapter$Converter");
+  public static final ClassDesc MAP_FIELD_REFLECTION = pb("MapFieldReflectionAccessor");
+  public static final ClassDesc MAP = ClassDesc.of("java.util.Map");
+  public static final ClassDesc ENUM_LITE = pb("Internal$EnumLite");
+  public static final ClassDesc ONEOF_ENUM = pb("AbstractMessageLite$InternalOneOfEnum");
+
   public static final ClassDesc RT = ClassDesc.of("dev.indyproto.runtime.Rt");
   public static final ClassDesc BOOTSTRAPS = ClassDesc.of("dev.indyproto.runtime.ProtoBootstraps");
 }

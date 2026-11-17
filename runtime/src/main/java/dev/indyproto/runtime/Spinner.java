@@ -131,6 +131,35 @@ final class Spinner {
     }
   }
 
+  /** Pushes the map field's default MapEntry (from the message's private static accessor). */
+  private void mapEntry(CodeBuilder cb, Field f) {
+    cb.invokestatic(msg, f.mapEntryMethod(), mt(CD.MAP_ENTRY));
+  }
+
+  private void oneofCase(CodeBuilder cb, ClassDesc owner, int slot, Field f) {
+    cb.aload(slot).getfield(owner, schema.oneofCaseField(f.oneof()), CD.I);
+  }
+
+  private void oneofValue(CodeBuilder cb, ClassDesc owner, int slot, Field f) {
+    cb.aload(slot).getfield(owner, schema.oneofValueField(f.oneof()), CD_Object);
+  }
+
+  /** Jumps to {@code skip} unless the member's oneof currently holds it. */
+  private void ifNotCase(CodeBuilder cb, ClassDesc owner, int slot, Field f, Label skip) {
+    oneofCase(cb, owner, slot, f);
+    cb.loadConstant(f.number()).if_icmpne(skip);
+  }
+
+  /** builder.internalGetMutableFoo() followed by getMutableMap() / ensureBuilderMap(). */
+  private void mutableMap(CodeBuilder cb, int b, Field f) {
+    cb.aload(b).invokevirtual(builder, f.mapMutableGetter(), mt(f.builderStorageDesc()));
+    if (f.mapOfMessages()) {
+      cb.invokevirtual(CD.MAP_FIELD_BUILDER, "ensureBuilderMap", mt(CD.MAP));
+    } else {
+      cb.invokevirtual(CD.MAP_FIELD, "getMutableMap", mt(CD.MAP));
+    }
+  }
+
   private static boolean isClassList(Field f) {
     return f.kind().list == ListKind.STRING; // LazyStringArrayList is a class, the rest interfaces
   }
@@ -182,7 +211,17 @@ final class Spinner {
     int m = 0, out = 1;
     for (Field f : schema.fields()) {
       Label skip = cb.newLabel();
-      if (f.repeated()) {
+      if (f.isMap()) {
+        cb.aload(out).loadConstant(f.number()).loadConstant(f.mapKey().ordinal());
+        getField(cb, msg, m, f);
+        mapEntry(cb, f);
+        cb.invokestatic(CD.RT, "writeMap", mt(CD.V, CD.COS, CD.I, CD.I, CD.MAP_FIELD, CD.MAP_ENTRY));
+      } else if (f.inOneof()) {
+        ifNotCase(cb, msg, m, f, skip);
+        cb.aload(out).loadConstant(f.number()).loadConstant(f.kind().ordinal());
+        oneofValue(cb, msg, m, f);
+        cb.invokestatic(CD.RT, "writeOneof", mt(CD.V, CD.COS, CD.I, CD.I, CD_Object));
+      } else if (f.repeated()) {
         if (f.packed()) {
           getField(cb, msg, m, f);
           invokeList(cb, f, "isEmpty", mt(CD.Z));
@@ -240,7 +279,18 @@ final class Spinner {
     cb.iconst_0().istore(size);
     for (Field f : schema.fields()) {
       Label skip = cb.newLabel();
-      if (f.repeated()) {
+      if (f.isMap()) {
+        cb.iload(size).loadConstant(f.number());
+        getField(cb, msg, m, f);
+        mapEntry(cb, f);
+        cb.invokestatic(CD.RT, "sizeMap", mt(CD.I, CD.I, CD.MAP_FIELD, CD.MAP_ENTRY))
+            .iadd().istore(size);
+      } else if (f.inOneof()) {
+        ifNotCase(cb, msg, m, f, skip);
+        cb.iload(size).loadConstant(f.number()).loadConstant(f.kind().ordinal());
+        oneofValue(cb, msg, m, f);
+        cb.invokestatic(CD.RT, "sizeOneof", mt(CD.I, CD.I, CD.I, CD_Object)).iadd().istore(size);
+      } else if (f.repeated()) {
         int data = cb.allocateLocal(TypeKind.INT);
         cb.iconst_0().istore(data);
         if (f.kind() == Kind.MESSAGE) {
@@ -319,7 +369,13 @@ final class Spinner {
     Label notEqual = cb.newLabel();
     for (Field f : schema.fields()) {
       Label next = cb.newLabel();
-      if (f.repeated()) {
+      if (f.inOneof()) continue;
+      if (f.isMap()) {
+        getField(cb, msg, a, f);
+        getField(cb, msg, b, f);
+        mapEntry(cb, f);
+        cb.invokestatic(CD.RT, "eqMap", mt(CD.Z, CD.MAP_FIELD, CD.MAP_FIELD, CD.MAP_ENTRY)).ifeq(notEqual);
+      } else if (f.repeated()) {
         getField(cb, msg, a, f);
         getField(cb, msg, b, f);
         invokeList(cb, f, "equals", mt(CD.Z, CD_Object));
@@ -370,6 +426,19 @@ final class Spinner {
       }
       cb.labelBinding(next);
     }
+    for (int i = 0; i < schema.oneofs().size(); i++) {
+      String cf = schema.oneofCaseField(i);
+      cb.aload(a).getfield(msg, cf, CD.I).aload(b).getfield(msg, cf, CD.I).if_icmpne(notEqual);
+      for (Field f : schema.oneofMembers(i)) {
+        Label next = cb.newLabel();
+        ifNotCase(cb, msg, a, f, next);
+        cb.loadConstant(f.kind().ordinal());
+        oneofValue(cb, msg, a, f);
+        oneofValue(cb, msg, b, f);
+        cb.invokestatic(CD.RT, "eqOneof", mt(CD.Z, CD.I, CD_Object, CD_Object)).ifeq(notEqual);
+        cb.labelBinding(next);
+      }
+    }
     cb.aload(a).invokevirtual(msg, "getUnknownFields", mt(CD.UNKNOWN_FIELD_SET))
         .aload(b).invokevirtual(msg, "getUnknownFields", mt(CD.UNKNOWN_FIELD_SET))
         .invokevirtual(CD.UNKNOWN_FIELD_SET, "equals", mt(CD.Z, CD_Object)).ifeq(notEqual);
@@ -387,8 +456,15 @@ final class Spinner {
     cb.loadConstant(19 * 41)
         .invokestatic(msg, "getDescriptor", mt(CD.DESCRIPTOR))
         .invokevirtual(CD_Object, "hashCode", mt(CD.I)).iadd().istore(h);
-    for (Field f : schema.fields()) {
+    for (Field f : schema.declared()) {
       Label skip = cb.newLabel();
+      if (f.inOneof()) continue;
+      if (f.isMap()) {
+        cb.iload(h).loadConstant(f.number());
+        getField(cb, msg, m, f);
+        cb.invokestatic(CD.RT, "mixMap", mt(CD.I, CD.I, CD.I, CD.MAP_FIELD)).istore(h);
+        continue;
+      }
       if (f.repeated()) {
         getField(cb, msg, m, f);
         invokeList(cb, f, "isEmpty", mt(CD.Z));
@@ -428,6 +504,17 @@ final class Spinner {
       cb.iadd().istore(h);
       cb.labelBinding(skip);
     }
+    for (int i = 0; i < schema.oneofs().size(); i++) {
+      for (Field f : schema.oneofMembers(i)) {
+        Label skip = cb.newLabel();
+        ifNotCase(cb, msg, m, f, skip);
+        cb.loadConstant(53).loadConstant(37).iload(h).imul().loadConstant(f.number()).iadd().imul();
+        cb.loadConstant(f.kind().ordinal());
+        oneofValue(cb, msg, m, f);
+        cb.invokestatic(CD.RT, "hashOneof", mt(CD.I, CD.I, CD_Object)).iadd().istore(h);
+        cb.labelBinding(skip);
+      }
+    }
     cb.loadConstant(29).iload(h).imul()
         .aload(m).invokevirtual(msg, "getUnknownFields", mt(CD.UNKNOWN_FIELD_SET))
         .invokevirtual(CD.UNKNOWN_FIELD_SET, "hashCode", mt(CD.I)).iadd().ireturn();
@@ -458,7 +545,11 @@ final class Spinner {
         cases.add(SwitchCase.of(f.tag(), l));
         bodies.add(() -> {
           tb.labelBinding(l);
-          readOne(tb, f, b, in, reg, iv, lv, fv, dv, ov, loop);
+          if (f.isMap()) {
+            readMapEntry(tb, f, b, in, reg, ov, lv);
+          } else {
+            readOne(tb, f, b, in, reg, iv, lv, fv, dv, ov, loop);
+          }
           tb.goto_(loop);
         });
         if (f.repeated() && f.kind().packable()) {
@@ -502,6 +593,49 @@ final class Spinner {
         }));
     cb.aload(b).invokevirtual(builder, "$onChanged", mt(CD.V));
     cb.return_();
+  }
+
+  /** Reads one MapEntry and puts it into the builder's map ({@code tmp} is a free ref local). */
+  private void readMapEntry(CodeBuilder cb, Field f, int b, int in, int reg, int ov, int tmpLong) {
+    int bytes = cb.allocateLocal(TypeKind.REFERENCE);
+    Label done = cb.newLabel();
+    if (f.mapValue() == Kind.ENUM && f.closedEnum()) {
+      cb.aload(in).invokevirtual(CD.CIS, "readBytes", mt(CD.BYTE_STRING)).astore(bytes);
+      cb.aload(bytes);
+      mapEntry(cb, f);
+      cb.invokestatic(f.typeDesc(), "internalGetValueMap", mt(CD.ENUM_LITE_MAP))
+          .invokestatic(CD.RT, "parseClosedEnumEntry", mt(CD.MAP_ENTRY, CD.BYTE_STRING, CD.MAP_ENTRY, CD.ENUM_LITE_MAP))
+          .astore(ov);
+      Label known = cb.newLabel();
+      cb.aload(ov).ifnonnull(known);
+      cb.aload(b).loadConstant(f.number()).aload(bytes)
+          .invokevirtual(builder, "$unknownLengthDelimited", mt(CD.V, CD.I, CD.BYTE_STRING));
+      cb.goto_(done);
+      cb.labelBinding(known);
+    } else {
+      cb.aload(in);
+      mapEntry(cb, f);
+      cb.invokevirtual(CD.MAP_ENTRY, "getParserForType", mt(CD.PARSER)).aload(reg)
+          .invokevirtual(CD.CIS, "readMessage", mt(CD.MESSAGE_LITE, CD.PARSER, CD.ERL))
+          .checkcast(CD.MAP_ENTRY).astore(ov);
+    }
+    mutableMap(cb, b, f);
+    cb.aload(ov).invokevirtual(CD.MAP_ENTRY, "getKey", mt(CD_Object))
+        .aload(ov).invokevirtual(CD.MAP_ENTRY, "getValue", mt(CD_Object))
+        .invokeinterface(CD.MAP, "put", mt(CD_Object, CD_Object, CD_Object)).pop();
+    cb.labelBinding(done);
+  }
+
+  /** Boxes a value of the field's stream type (on the stack) for a oneof slot. */
+  private static void box(CodeBuilder cb, Kind k) {
+    switch (k.jvm) {
+      case 'I' -> cb.invokestatic(ClassDesc.of("java.lang.Integer"), "valueOf", mt(ClassDesc.of("java.lang.Integer"), CD.I));
+      case 'J' -> cb.invokestatic(ClassDesc.of("java.lang.Long"), "valueOf", mt(ClassDesc.of("java.lang.Long"), CD.J));
+      case 'F' -> cb.invokestatic(CD.FLOAT_BOX, "valueOf", mt(CD.FLOAT_BOX, CD.F));
+      case 'D' -> cb.invokestatic(CD.DOUBLE_BOX, "valueOf", mt(CD.DOUBLE_BOX, CD.D));
+      case 'Z' -> cb.invokestatic(ClassDesc.of("java.lang.Boolean"), "valueOf", mt(ClassDesc.of("java.lang.Boolean"), CD.Z));
+      default -> {}
+    }
   }
 
   /**
@@ -575,6 +709,11 @@ final class Spinner {
         default -> cb.invokeinterface(k.list.desc(), "add" + k.list.accessorSuffix,
             mt(CD.V, k.valueDesc()));
       }
+    } else if (f.inOneof()) {
+      cb.aload(b).loadLocal(tk, local);
+      box(cb, k);
+      cb.putfield(builder, schema.oneofValueField(f.oneof()), CD_Object);
+      cb.aload(b).loadConstant(f.number()).putfield(builder, schema.oneofCaseField(f.oneof()), CD.I);
     } else {
       cb.aload(b).loadLocal(tk, local).putfield(builder, f.fieldName(), f.storageDesc());
       if (f.presence()) setBit(cb, builder, b, f);
@@ -588,7 +727,26 @@ final class Spinner {
     int b = 0, o = 1;
     for (Field f : schema.fields()) {
       Label skip = cb.newLabel();
-      if (f.repeated()) {
+      if (f.isMap()) {
+        getField(cb, msg, o, f);
+        cb.ifnull(skip);
+        cb.aload(b).invokevirtual(builder, f.mapMutableGetter(), mt(f.builderStorageDesc()));
+        getField(cb, msg, o, f);
+        cb.invokevirtual(f.builderStorageDesc(), "mergeFrom", mt(CD.V, CD.MAP_FIELD));
+      } else if (f.inOneof()) {
+        ifNotCase(cb, msg, o, f, skip);
+        if (f.kind() == Kind.MESSAGE) {
+          cb.aload(b);
+          oneofValue(cb, msg, o, f);
+          cb.checkcast(f.typeDesc())
+              .invokevirtual(builder, "merge" + f.camelName(), mt(builder, f.typeDesc())).pop();
+        } else {
+          cb.aload(b);
+          oneofValue(cb, msg, o, f);
+          cb.putfield(builder, schema.oneofValueField(f.oneof()), CD_Object);
+          cb.aload(b).loadConstant(f.number()).putfield(builder, schema.oneofCaseField(f.oneof()), CD.I);
+        }
+      } else if (f.repeated()) {
         getField(cb, msg, o, f);
         invokeList(cb, f, "isEmpty", mt(CD.Z));
         cb.ifne(skip);
@@ -652,7 +810,43 @@ final class Spinner {
       String n = "bitField" + w + "_";
       cb.aload(r).aload(b).getfield(builder, n, CD.I).putfield(msg, n, CD.I);
     }
+    for (int i = 0; i < schema.oneofs().size(); i++) {
+      String cf = schema.oneofCaseField(i), vf = schema.oneofValueField(i);
+      cb.aload(r).aload(b).getfield(builder, cf, CD.I).putfield(msg, cf, CD.I);
+      cb.aload(r).aload(b).getfield(builder, vf, CD_Object).putfield(msg, vf, CD_Object);
+      for (Field f : schema.oneofMembers(i)) {
+        if (f.kind() != Kind.MESSAGE) continue;
+        Label skip = cb.newLabel();
+        ifNotCase(cb, builder, b, f, skip);
+        cb.aload(b).getfield(builder, f.builderFieldName(), CD.SINGLE_FIELD_BUILDER).ifnull(skip);
+        cb.aload(r).aload(b).getfield(builder, f.builderFieldName(), CD.SINGLE_FIELD_BUILDER)
+            .invokevirtual(CD.SINGLE_FIELD_BUILDER, "build", mt(CD.GENERATED_MESSAGE))
+            .putfield(msg, vf, CD_Object);
+        cb.labelBinding(skip);
+      }
+    }
     for (Field f : schema.fields()) {
+      if (f.inOneof()) continue;
+      if (f.isMap()) {
+        if (f.mapOfMessages()) {
+          Label isNull = cb.newLabel(), store = cb.newLabel();
+          cb.aload(r).aload(b).getfield(builder, f.fieldName(), CD.MAP_FIELD_BUILDER).ifnull(isNull);
+          cb.aload(b).getfield(builder, f.fieldName(), CD.MAP_FIELD_BUILDER);
+          mapEntry(cb, f);
+          cb.invokevirtual(CD.MAP_FIELD_BUILDER, "build", mt(CD.MAP_FIELD, CD.MAP_ENTRY)).goto_(store);
+          cb.labelBinding(isNull);
+          cb.aconst_null();
+          cb.labelBinding(store);
+          cb.putfield(msg, f.fieldName(), CD.MAP_FIELD);
+        } else {
+          Label isNull = cb.newLabel();
+          cb.aload(b).getfield(builder, f.fieldName(), CD.MAP_FIELD).ifnull(isNull);
+          cb.aload(b).getfield(builder, f.fieldName(), CD.MAP_FIELD).invokevirtual(CD.MAP_FIELD, "makeImmutable", mt(CD.V));
+          cb.labelBinding(isNull);
+          cb.aload(r).aload(b).getfield(builder, f.fieldName(), CD.MAP_FIELD).putfield(msg, f.fieldName(), CD.MAP_FIELD);
+        }
+        continue;
+      }
       if (f.repeated()) {
         Label done = cb.newLabel();
         if (f.kind() == Kind.MESSAGE) {
@@ -707,7 +901,28 @@ final class Spinner {
     for (int w = 0; w < schema.bitWords(); w++) {
       cb.aload(b).iconst_0().putfield(builder, "bitField" + w + "_", CD.I);
     }
+    for (int i = 0; i < schema.oneofs().size(); i++) {
+      cb.aload(b).iconst_0().putfield(builder, schema.oneofCaseField(i), CD.I);
+      cb.aload(b).aconst_null().putfield(builder, schema.oneofValueField(i), CD_Object);
+      for (Field f : schema.oneofMembers(i)) {
+        if (f.kind() != Kind.MESSAGE) continue;
+        Label none = cb.newLabel();
+        cb.aload(b).getfield(builder, f.builderFieldName(), CD.SINGLE_FIELD_BUILDER).ifnull(none);
+        cb.aload(b).getfield(builder, f.builderFieldName(), CD.SINGLE_FIELD_BUILDER)
+            .invokevirtual(CD.SINGLE_FIELD_BUILDER, "clear", mt(CD.SINGLE_FIELD_BUILDER)).pop();
+        cb.labelBinding(none);
+      }
+    }
     for (Field f : schema.fields()) {
+      if (f.inOneof()) continue;
+      if (f.isMap()) {
+        Label none = cb.newLabel();
+        cb.aload(b).getfield(builder, f.fieldName(), f.builderStorageDesc()).ifnull(none);
+        cb.aload(b).invokevirtual(builder, f.mapMutableGetter(), mt(f.builderStorageDesc()))
+            .invokevirtual(f.builderStorageDesc(), "clear", mt(CD.V));
+        cb.labelBinding(none);
+        continue;
+      }
       if (f.kind() == Kind.MESSAGE) {
         ClassDesc fb = f.repeated() ? CD.REPEATED_FIELD_BUILDER : CD.SINGLE_FIELD_BUILDER;
         Label noBuilder = cb.newLabel();

@@ -101,7 +101,7 @@ val indyGen by tasks.registering(JavaExec::class) {
         listOf("--descriptor-set", descriptorSet.get().asFile.absolutePath,
             "--out", indyClasses.get().asFile.absolutePath,
             "--rewrite", "sample=indy.sample", "--rewrite", "bench=indy.bench",
-            "--rewrite", "wide=indy.wide", "--rewrite", "many=indy.many")
+            "--rewrite", "wide=indy.wide", "--rewrite", "many=indy.many", "--rewrite", "shapes=indy.shapes")
     })
 }
 
