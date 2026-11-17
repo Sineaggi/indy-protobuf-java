@@ -39,6 +39,7 @@ final class MessageWriter {
   private final Gen gen;
   private final ClassDesc outer;
   private final List<Integer> path;
+  private final OneofMapWriter om;
 
   MessageWriter(Model m, Names names, Hierarchy h, Gen gen, ClassDesc outer, List<Integer> path) {
     this.m = m;
@@ -47,11 +48,12 @@ final class MessageWriter {
     this.gen = gen;
     this.outer = outer;
     this.path = path;
+    this.om = new OneofMapWriter(m, this);
   }
 
   // ---- constant-pool constants --------------------------------------------------------------
 
-  private static DirectMethodHandleDesc condyBsm(String name, ClassDesc ret, ClassDesc... extra) {
+  static DirectMethodHandleDesc condyBsm(String name, ClassDesc ret, ClassDesc... extra) {
     return ConstantDescs.ofConstantBootstrap(CD.BOOTSTRAPS, name, ret, extra);
   }
 
@@ -72,6 +74,10 @@ final class MessageWriter {
       if (!camel.isEmpty()) camel.append(',');
       camel.append(f.cap());
     }
+    for (String o : m.allOneofNames) {
+      if (!camel.isEmpty()) camel.append(',');
+      camel.append(o);
+    }
     return DynamicConstantDesc.ofNamed(
         condyBsm("accessorTable", CD.GM_FIELD_ACCESSOR_TABLE, CD.CLASS, CD.CLASS, CD.STRING),
         "table", CD.GM_FIELD_ACCESSOR_TABLE, m.msg, m.builder, camel.toString());
@@ -87,7 +93,7 @@ final class MessageWriter {
         "parser", CD.PARSER, m.msg);
   }
 
-  private DynamicConstantDesc<?> converterConst(F f) {
+  DynamicConstantDesc<?> converterConst(F f) {
     ClassDesc conv = ClassDesc.of("com.google.protobuf.Internal$IntListAdapter$IntConverter");
     return DynamicConstantDesc.ofNamed(condyBsm("enumConverter", conv, CD.CLASS, CD.STRING),
         "conv_" + f.cap(), conv, f.type(), f.openEnum() ? "UNRECOGNIZED" : "");
@@ -139,6 +145,14 @@ final class MessageWriter {
     int flags = iface ? PUBLIC | Cls.ABSTRACT : PUBLIC;
     boolean isBuilder = owner != null && owner.equals(m.builder);
     for (F f : m.fields) {
+      if (f.isMap()) {
+        om.mapReadAccessors(c, owner, iface, f);
+        continue;
+      }
+      if (f.inOneof()) {
+        om.oneofReadAccessors(c, owner, iface, f);
+        continue;
+      }
       String cap = f.cap();
       ClassDesc vt = Model.valueType(f);
       if (!f.repeated()) {
@@ -355,9 +369,10 @@ final class MessageWriter {
         cb.ireturn();
       }));
     }
+    for (Model.O o : m.oneofs) om.caseGetter(c, owner, iface, o);
   }
 
-  private static Consumer<CodeBuilder> body(boolean iface, Consumer<CodeBuilder> code) {
+  static Consumer<CodeBuilder> body(boolean iface, Consumer<CodeBuilder> code) {
     return iface ? null : code;
   }
 
@@ -388,7 +403,7 @@ final class MessageWriter {
   }
 
   /** int on stack -> enum constant (UNRECOGNIZED / first value when unknown). */
-  private void enumFromNumber(CodeBuilder cb, F f) {
+  void enumFromNumber(CodeBuilder cb, F f) {
     cb.invokestatic(f.type(), "forNumber", mt(f.type(), CD.I));
     cb.dup();
     Label ok = cb.newLabel();
@@ -438,11 +453,18 @@ final class MessageWriter {
         clb.withField(f.fd().getName().toUpperCase(java.util.Locale.ROOT) + "_FIELD_NUMBER", CD.I, fb -> fb
             .withFlags(ClassFile.ACC_PUBLIC | ClassFile.ACC_STATIC | ClassFile.ACC_FINAL)
             .with(java.lang.classfile.attribute.ConstantValueAttribute.of(f.s().number())));
+        if (f.inOneof()) continue;
         int flags = ClassFile.ACC_PRIVATE;
         if (!f.repeated() && f.kind() == Kind.STRING) flags |= ClassFile.ACC_VOLATILE;
         clb.withField(f.field(), f.storage(), flags);
         if (f.s().packed()) clb.withField(f.s().memoFieldName(), CD.I, ClassFile.ACC_PRIVATE);
+        if (f.isMap()) om.mapPrivates(c, m.msg, f);
       }
+      for (Model.O o : m.oneofs) {
+        clb.withField(o.caseField(), CD.I, ClassFile.ACC_PRIVATE);
+        clb.withField(o.valueField(), CD_Object, ClassFile.ACC_PRIVATE);
+      }
+      om.mapReflection(c, m.msg, false);
 
       // constructors
       c.method(INIT_NAME, PRIVATE, mt(CD.V, CD.GM_BUILDER), cb -> cb
@@ -538,6 +560,7 @@ final class MessageWriter {
 
   private void initDefaults(CodeBuilder cb, ClassDesc owner) {
     for (F f : m.fields) {
+      if (f.inOneof() || f.isMap()) continue;
       if (!f.repeated() && f.kind() != Kind.STRING && f.kind() != Kind.BYTES) continue;
       cb.aload(0);
       pushDefault(cb, f);
@@ -618,7 +641,12 @@ final class MessageWriter {
         clb.withField("bitField" + w + "_", CD.I, ClassFile.ACC_PRIVATE);
       }
       for (F f : m.fields) {
-        clb.withField(f.field(), f.storage(), ClassFile.ACC_PRIVATE);
+        if (f.isMap()) {
+          clb.withField(f.field(), f.s().builderStorageDesc(), ClassFile.ACC_PRIVATE);
+          om.mapPrivates(c, B, f);
+          continue;
+        }
+        if (!f.inOneof()) clb.withField(f.field(), f.storage(), ClassFile.ACC_PRIVATE);
         if (f.kind() == Kind.MESSAGE) {
           clb.withField(f.fb(), f.repeated() ? CD.REPEATED_FIELD_BUILDER : CD.SINGLE_FIELD_BUILDER,
               ClassFile.ACC_PRIVATE);
@@ -697,19 +725,30 @@ final class MessageWriter {
       c.method("$unknownVarint", PRIVATE, mt(CD.V, CD.I, CD.I), cb -> cb
           .aload(0).iload(1).iload(2).invokevirtual(B, "mergeUnknownVarintField", mt(CD.V, CD.I, CD.I)).return_());
 
+      c.method("$unknownLengthDelimited", PRIVATE, mt(CD.V, CD.I, CD.BYTE_STRING), cb -> cb
+          .aload(0).iload(1).aload(2)
+          .invokevirtual(B, "mergeUnknownLengthDelimitedField", mt(CD.V, CD.I, CD.BYTE_STRING)).return_());
+      for (Model.O o : m.oneofs) {
+        clb.withField(o.caseField(), CD.I, ClassFile.ACC_PRIVATE);
+        clb.withField(o.valueField(), CD_Object, ClassFile.ACC_PRIVATE);
+      }
+      om.mapReflection(c, B, false);
+      om.mapReflection(c, B, true);
+
       readAccessors(c, B, false);
       builderMutators(c);
+      for (Model.O o : m.oneofs) om.clearOneof(c, o);
 
       h.addMethods(B, c.decls);
       h.emitBridges(c);
     });
   }
 
-  private void onChanged(CodeBuilder cb) {
+  void onChanged(CodeBuilder cb) {
     cb.aload(0).invokevirtual(m.builder, "onChanged", mt(CD.V));
   }
 
-  private void requireNonNull(CodeBuilder cb, int slot) {
+  void requireNonNull(CodeBuilder cb, int slot) {
     cb.aload(slot).invokestatic(CD.OBJECTS, "requireNonNull", mt(CD_Object, CD_Object)).pop();
   }
 
@@ -720,6 +759,14 @@ final class MessageWriter {
   private void builderMutators(Cls c) {
     ClassDesc B = m.builder;
     for (F f : m.fields) {
+      if (f.isMap()) {
+        om.mapMutators(c, f);
+        continue;
+      }
+      if (f.inOneof()) {
+        om.oneofBuilderMutators(c, f);
+        continue;
+      }
       String cap = f.cap();
       ClassDesc vt = Model.valueType(f);
       if (!f.repeated()) {

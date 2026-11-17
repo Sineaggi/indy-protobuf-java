@@ -48,6 +48,7 @@ final class MhLinker {
   // field access
 
   private static Class<?> storageClass(Lookup lookup, Field f) throws ReflectiveOperationException {
+    if (f.isMap()) return com.google.protobuf.MapField.class;
     if (f.repeated()) {
       return switch (f.kind().list) {
         case INT -> Internal.IntList.class;
@@ -107,12 +108,62 @@ final class MhLinker {
   }
 
   // ---------------------------------------------------------------------------------------------
+  // oneof members and map fields go through generic helpers in Rt (kind is a constant)
+
+  /** (M)boolean: the member's oneof currently holds it. */
+  private static MethodHandle isCase(Lookup lookup, Class<?> m, Schema schema, Field f)
+      throws ReflectiveOperationException {
+    MethodHandle c = lookup.findGetter(m, schema.oneofCaseField(f.oneof()), int.class);
+    return MethodHandles.filterArguments(MethodHandles.insertArguments(H_EQ_I, 1, f.number()), 0, c);
+  }
+
+  private static MethodHandle oneofValue(Lookup lookup, Class<?> m, Schema schema, Field f)
+      throws ReflectiveOperationException {
+    return lookup.findGetter(m, schema.oneofValueField(f.oneof()), Object.class);
+  }
+
+  private static Object mapEntryOf(Lookup lookup, Class<?> m, Field f) throws Throwable {
+    return lookup.findStatic(m, f.mapEntryMethod(),
+        methodType(com.google.protobuf.MapEntry.class)).invoke();
+  }
+
+  private static MethodHandle rt(String name, MethodType t) {
+    try {
+      return L.findStatic(Rt.class, name, t);
+    } catch (ReflectiveOperationException e) {
+      throw new IllegalStateException(e);
+    }
+  }
+
+  private static final Class<?> MF = com.google.protobuf.MapField.class;
+  private static final Class<?> ME = com.google.protobuf.MapEntry.class;
+
+  // ---------------------------------------------------------------------------------------------
   // writeTo: (M, COS)void
 
   private static MethodHandle writeTo(Lookup lookup, Class<?> m, Schema schema) throws Throwable {
     List<MethodHandle> leaves = new ArrayList<>();
     MethodType leafType = methodType(void.class, m, CodedOutputStream.class);
     for (Field f : schema.fields()) {
+      if (f.isMap()) {
+        MethodHandle h = MethodHandles.insertArguments(
+            rt("writeMap", methodType(void.class, COS, int.class, int.class, MF, ME)),
+            1, f.number(), f.mapKey().ordinal());
+        h = MethodHandles.insertArguments(h, 2, mapEntryOf(lookup, m, f));
+        h = MethodHandles.filterArguments(h, 1, getter(lookup, m, f));
+        leaves.add(MethodHandles.permuteArguments(h, leafType, 1, 0));
+        continue;
+      }
+      if (f.inOneof()) {
+        MethodHandle h = MethodHandles.insertArguments(
+            rt("writeOneof", methodType(void.class, COS, int.class, int.class, Object.class)),
+            1, f.number(), f.kind().ordinal());
+        h = MethodHandles.filterArguments(h, 1, oneofValue(lookup, m, schema, f));
+        h = MethodHandles.permuteArguments(h, leafType, 1, 0);
+        MethodHandle test = MethodHandles.dropArguments(isCase(lookup, m, schema, f), 1, CodedOutputStream.class);
+        leaves.add(MethodHandles.guardWithTest(test, h, MethodHandles.empty(leafType)));
+        continue;
+      }
       MethodHandle g = getter(lookup, m, f);
       MethodHandle w;
       if (f.repeated()) {
@@ -158,7 +209,23 @@ final class MhLinker {
   private static MethodHandle serializedSize(Lookup lookup, Class<?> m, Schema schema) throws Throwable {
     List<MethodHandle> leaves = new ArrayList<>();
     MethodType leafType = methodType(int.class, m);
+    MethodHandle zero = MethodHandles.dropArguments(MethodHandles.constant(int.class, 0), 0, m);
     for (Field f : schema.fields()) {
+      if (f.isMap()) {
+        MethodHandle h = MethodHandles.insertArguments(
+            rt("sizeMap", methodType(int.class, int.class, MF, ME)), 0, f.number());
+        h = MethodHandles.insertArguments(h, 1, mapEntryOf(lookup, m, f));
+        leaves.add(MethodHandles.filterArguments(h, 0, getter(lookup, m, f)));
+        continue;
+      }
+      if (f.inOneof()) {
+        MethodHandle h = MethodHandles.insertArguments(
+            rt("sizeOneof", methodType(int.class, int.class, int.class, Object.class)),
+            0, f.number(), f.kind().ordinal());
+        h = MethodHandles.filterArguments(h, 0, oneofValue(lookup, m, schema, f));
+        leaves.add(MethodHandles.guardWithTest(isCase(lookup, m, schema, f), h, zero));
+        continue;
+      }
       MethodHandle g = getter(lookup, m, f);
       MethodHandle s;
       if (f.repeated()) {
@@ -209,6 +276,14 @@ final class MhLinker {
     MethodHandle fls = MethodHandles.dropArguments(MethodHandles.constant(boolean.class, false), 0, m, m);
     List<MethodHandle> leaves = new ArrayList<>();
     for (Field f : schema.fields()) {
+      if (f.inOneof()) continue;
+      if (f.isMap()) {
+        MethodHandle eq = MethodHandles.insertArguments(
+            rt("eqMap", methodType(boolean.class, MF, MF, ME)), 2, mapEntryOf(lookup, m, f));
+        MethodHandle g = getter(lookup, m, f);
+        leaves.add(MethodHandles.filterArguments(eq, 0, g, g));
+        continue;
+      }
       MethodHandle value = valueForCompare(lookup, m, f);
       MethodHandle eq = switch (value.type().returnType().getName()) {
         case "int" -> H_EQ_I;
@@ -226,6 +301,19 @@ final class MhLinker {
         leaf = MethodHandles.guardWithTest(sameHas, valueIfSet, fls);
       }
       leaves.add(leaf);
+    }
+    for (int i = 0; i < schema.oneofs().size(); i++) {
+      MethodHandle c = lookup.findGetter(m, schema.oneofCaseField(i), int.class);
+      leaves.add(MethodHandles.filterArguments(H_EQ_I, 0, c, c));
+      for (Field f : schema.oneofMembers(i)) {
+        MethodHandle v = oneofValue(lookup, m, schema, f);
+        MethodHandle eq = MethodHandles.insertArguments(
+            rt("eqOneof", methodType(boolean.class, int.class, Object.class, Object.class)),
+            0, f.kind().ordinal());
+        eq = MethodHandles.filterArguments(eq, 0, v, v);
+        leaves.add(MethodHandles.guardWithTest(
+            MethodHandles.dropArguments(isCase(lookup, m, schema, f), 1, m), eq, t));
+      }
     }
     MethodHandle ufs = lookup.findVirtual(m, "getUnknownFields", methodType(UnknownFieldSet.class))
         .asType(methodType(Object.class, m));
@@ -254,7 +342,15 @@ final class MhLinker {
   private static MethodHandle hashCodeMh(Lookup lookup, Class<?> m, Schema schema) throws Throwable {
     MethodType stepType = methodType(int.class, int.class, m);
     List<MethodHandle> steps = new ArrayList<>();
-    for (Field f : schema.fields()) {
+    MethodHandle keep = MethodHandles.dropArguments(MethodHandles.identity(int.class), 1, m);
+    for (Field f : schema.declared()) {
+      if (f.inOneof()) continue;
+      if (f.isMap()) {
+        MethodHandle mix = MethodHandles.insertArguments(
+            rt("mixMap", methodType(int.class, int.class, int.class, MF)), 1, f.number());
+        steps.add(MethodHandles.filterArguments(mix, 1, getter(lookup, m, f)).asType(stepType));
+        continue;
+      }
       MethodHandle vh = valueHash(lookup, m, f);
       MethodHandle step = MethodHandles.filterArguments(
           MethodHandles.insertArguments(H_MIX, 1, f.number()), 1, vh);
@@ -264,6 +360,17 @@ final class MhLinker {
             MethodHandles.dropArguments(MethodHandles.identity(int.class), 1, m));
       }
       steps.add(step.asType(stepType));
+    }
+    for (int i = 0; i < schema.oneofs().size(); i++) {
+      for (Field f : schema.oneofMembers(i)) {
+        MethodHandle vh = MethodHandles.filterArguments(MethodHandles.insertArguments(
+            rt("hashOneof", methodType(int.class, int.class, Object.class)), 0, f.kind().ordinal()),
+            0, oneofValue(lookup, m, schema, f));
+        MethodHandle step = MethodHandles.filterArguments(
+            MethodHandles.insertArguments(H_MIX, 1, f.number()), 1, vh);
+        steps.add(MethodHandles.guardWithTest(
+            MethodHandles.dropArguments(isCase(lookup, m, schema, f), 0, int.class), step, keep));
+      }
     }
     MethodHandle ufs = lookup.findVirtual(m, "getUnknownFields", methodType(UnknownFieldSet.class))
         .asType(methodType(Object.class, m));

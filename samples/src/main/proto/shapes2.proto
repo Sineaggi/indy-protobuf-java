@@ -1,0 +1,26 @@
+// proto2 oneof and maps (closed enums), nested in the outer class.
+syntax = "proto2";
+
+package shapes2;
+
+import "shapes.proto";
+
+option java_package = "shapes";
+
+enum Level {
+  NONE = 0;
+  LOW = 1;
+  HIGH = 2;
+}
+
+message Legacy {
+  oneof pick {
+    string text = 1;
+    Level level = 2;
+    shapes.Point at = 3;
+    sfixed32 code = 4;
+  }
+  map<string, Level> levels = 5;
+  map<fixed64, Legacy> kids = 6;
+  optional int32 id = 7;
+}

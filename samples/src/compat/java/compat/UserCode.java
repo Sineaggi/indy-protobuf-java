@@ -17,6 +17,13 @@ import @PKG@sample.Person;
 import @PKG@sample.PersonOrBuilder;
 import @PKG@sample.legacy.Legacy;
 import @PKG@sample.legacy.Legacy.Event;
+import @PKG@shapes.Point;
+import @PKG@shapes.Shape;
+import @PKG@shapes.ShapeOrBuilder;
+import @PKG@shapes.Shapes2;
+import @PKG@shapes.Unit;
+import java.util.Map;
+import java.util.TreeMap;
 
 /**
  * "Existing user code": written once against the protoc-generated API, compiled twice (against
@@ -111,6 +118,77 @@ public final class UserCode {
     log.add("descriptor=" + Event.getDescriptor().getFullName() + " file=" + Legacy.getDescriptor().getName());
     log.add("json=" + JsonFormat.printer().omittingInsignificantWhitespace().print(batch.getEvents(1)));
     log.add("text=" + p.getPinned().toString().trim());
+    shapes(log);
     return log;
+  }
+
+  private static void shapes(List<String> log) throws IOException {
+    Shape.Builder sb = Shape.newBuilder().setName("sq").setRadius(2.5);
+    log.add("case=" + sb.getKindCase() + " radius=" + sb.getRadius() + " hasCorner=" + sb.hasCorner());
+    sb.getCornerBuilder().setX(3).setY(4);
+    log.add("case=" + sb.getKindCase() + " radius=" + sb.getRadius() + " corner=" + sb.getCorner().getX()
+        + "," + sb.getCornerOrBuilder().getY());
+    sb.setUnitValue(9);
+    log.add("unit=" + sb.getUnit() + " raw=" + sb.getUnitValue() + " case#=" + sb.getKindCase().getNumber());
+    sb.setLabel("hi").setRatio(0.5f);
+    Shape s1 = sb.build();
+    switch (s1.getKindCase()) {
+      case LABEL -> log.add("label " + s1.getLabel() + "/" + s1.getLabelBytes().size());
+      case KIND_NOT_SET -> log.add("not set");
+      default -> log.add("other " + s1.getKindCase());
+    }
+    log.add("second=" + s1.getSecondCase() + " forNumber=" + Shape.KindCase.forNumber(3) + " " + Shape.SecondCase.valueOf("DELTA"));
+    Shape s2 = s1.toBuilder().clearKind().setDelta(-3).build();
+    log.add("s2 case=" + s2.getKindCase() + " label=[" + s2.getLabel() + "] delta=" + s2.getDelta() + " ratio=" + s2.getRatio());
+    log.add("cleared member=" + s1.toBuilder().clearLabel().getKindCase() + " other member=" + s1.toBuilder().clearRadius().getKindCase());
+
+    Shape.Builder mb = Shape.newBuilder()
+        .putCounts("a", 1).putCounts("b", 2)
+        .putAllCounts(Map.of("c", 3))
+        .putNames(7, "seven")
+        .putPoints("o", Point.newBuilder().setX(1).build())
+        .putUnits(5L, Unit.INCH).putUnitsValue(6L, 42)
+        .putBlobs(true, ByteString.copyFromUtf8("t"))
+        .putWeights(1, 0.25)
+        .putTimes("now", Timestamp.newBuilder().setSeconds(9).build());
+    mb.putPointsBuilderIfAbsent("p").setY(8);
+    mb.removeCounts("b");
+    mb.getMutableCounts().put("d", 4);
+    Shape m = mb.build();
+    log.add("counts=" + new TreeMap<>(m.getCountsMap()) + " n=" + m.getCountsCount() + " hasA=" + m.containsCounts("a")
+        + " z=" + m.getCountsOrDefault("z", -1) + " a=" + m.getCountsOrThrow("a"));
+    try {
+      m.getCountsOrThrow("zz");
+    } catch (IllegalArgumentException ex) {
+      log.add("orThrow -> IAE");
+    }
+    try {
+      mb.putCounts(null, 1);
+    } catch (NullPointerException ex) {
+      log.add("null key -> NPE");
+    }
+    log.add("names=" + m.getNamesMap() + " points=" + new TreeMap<>(m.getPointsMap()).keySet() + " p.y=" + m.getPointsOrThrow("p").getY());
+    log.add("units=" + new TreeMap<>(m.getUnitsMap()) + " values=" + new TreeMap<>(m.getUnitsValueMap())
+        + " u6=" + m.getUnitsOrDefault(6L, Unit.MM) + " u6v=" + m.getUnitsValueOrThrow(6L));
+    log.add("blobs=" + m.getBlobsMap().get(true).toStringUtf8() + " weights=" + m.getWeightsMap() + " times=" + m.getTimesOrThrow("now").getSeconds());
+    ShapeOrBuilder view = mb;
+    log.add("builder view counts=" + new TreeMap<>(view.getCountsMap()) + " points=" + view.getPointsCount());
+    Shape back = Shape.parseFrom(m.toByteArray());
+    log.add("maps equal=" + back.equals(m) + " hash=" + (back.hashCode() == m.hashCode()));
+    log.add("merged counts=" + new TreeMap<>(m.toBuilder().mergeFrom(Shape.newBuilder().putCounts("a", 10).build()).build().getCountsMap()));
+    log.add("cleared maps=" + m.toBuilder().clearCounts().clearPoints().build().getPointsCount());
+    log.add("json=" + JsonFormat.printer().omittingInsignificantWhitespace().print(m.toBuilder().clearUnits().clearPoints().clearTimes()
+        .clearCounts().clearBlobs().build()));
+
+    Shapes2.Legacy l = Shapes2.Legacy.newBuilder()
+        .setLevel(Shapes2.Level.HIGH)
+        .putLevels("x", Shapes2.Level.LOW)
+        .putKids(1L, Shapes2.Legacy.newBuilder().setText("kid").build())
+        .setId(3)
+        .build();
+    log.add("legacy pick=" + l.getPickCase() + " level=" + l.getLevel() + " levels=" + l.getLevelsMap()
+        + " kid=" + l.getKidsOrThrow(1L).getText() + " id=" + l.getId());
+    Shapes2.Legacy l2 = Shapes2.Legacy.parseFrom(l.toBuilder().setAt(Point.newBuilder().setX(5)).build().toByteArray());
+    log.add("legacy at=" + l2.getAt().getX() + " pick=" + l2.getPickCase() + " " + Shapes2.Legacy.PickCase.PICK_NOT_SET);
   }
 }

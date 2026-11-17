@@ -25,7 +25,14 @@ final class Fill {
     for (FieldDescriptor f : b.getDescriptorForType().getFields()) {
       if (f.isRepeated()) {
         int n = depth > 2 ? 0 : r.nextInt(4);
-        for (int i = 0; i < n; i++) b.addRepeatedField(f, value(b, f, r, depth));
+        // map keys stay distinct: a reflection-built map with duplicate keys keeps them all on the
+        // wire, while any parsed copy keeps only the last, so the two would not be comparable
+        java.util.Set<Object> keys = new java.util.HashSet<>();
+        for (int i = 0; i < n; i++) {
+          Object v = value(b, f, r, depth);
+          if (f.isMapField() && !keys.add(((Message) v).getField(f.getMessageType().findFieldByNumber(1)))) continue;
+          b.addRepeatedField(f, v);
+        }
       } else if (r.nextInt(4) != 0) {
         if (f.getJavaType() == FieldDescriptor.JavaType.MESSAGE && depth > 2) continue;
         b.setField(f, value(b, f, r, depth));

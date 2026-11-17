@@ -137,6 +137,11 @@ public final class Gen {
           ClassFile.ACC_PUBLIC | ClassFile.ACC_STATIC | ClassFile.ACC_INTERFACE | ClassFile.ACC_ABSTRACT));
     }
     nesting.put(m.builder, new Nesting(m.msg, "Builder", PSF));
+    for (Model.O o : m.oneofs) {
+      h.register(o.caseEnum(), ClassDesc.of("java.lang.Enum"), List.of(CD.ENUM_LITE, CD.ONEOF_ENUM), false);
+      nesting.put(o.caseEnum(), new Nesting(m.msg, o.cap() + "Case", PSF | ClassFile.ACC_ENUM));
+      writers.add(() -> out.put(o.caseEnum(), OneofMapWriter.writeCaseEnum(o, h, this)));
+    }
     writers.add(() -> {
       out.put(m.orBuilder, w.writeOrBuilder());
     });

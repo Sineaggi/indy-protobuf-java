@@ -38,4 +38,4 @@ bench/scripts/jmh.sh                     # steady-state JMH -> bench/build/jmh/
 
 ## Not supported yet
 
-`oneof`, `map` fields, extensions, groups, `required`, custom defaults, enum aliases, and protobuf-javalite/Android.
+Extensions, groups, `required`, custom defaults, enum aliases, and protobuf-javalite/Android.
