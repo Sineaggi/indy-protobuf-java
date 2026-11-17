@@ -237,7 +237,10 @@ public final class ProtoBootstraps {
         : type.parameterType(0);
     trace("indy " + name + " [" + STRATEGY + "]", msgClass);
 
-    if (STRATEGY.equals("mh") && !builderSide) {
+    // The extension serializer is a stateful cursor across the field writes, which does not fit
+    // the stateless leaves of the combinator tree, so extendable messages spin their writeTo.
+    boolean mhCapable = !(name.equals("writeTo") && schema.extendable());
+    if (STRATEGY.equals("mh") && !builderSide && mhCapable) {
       MethodHandle mh = MhLinker.link(lookup, name, type, msgClass, schema);
       return new ConstantCallSite(mh.asType(type));
     }
@@ -270,7 +273,10 @@ public final class ProtoBootstraps {
     Class<?> b = builderSide ? lookup.lookupClass() : null;
     Spinner sp = new Spinner(lookup, m, schema);
     java.util.List<String> ops = builderSide ? BUILDER_OPS : MESSAGE_OPS;
-    if (!builderSide && STRATEGY.equals("mh")) ops = java.util.List.of();
+    if (!builderSide && STRATEGY.equals("mh")) {
+      // only what the combinator strategy leaves to spinning (see bootstrap0)
+      ops = schema.extendable() ? java.util.List.of("writeTo") : java.util.List.of();
+    }
     java.util.List<String> todo = ops;
     return sp.spinClass("Ops", clb -> {
       for (String op : todo) {

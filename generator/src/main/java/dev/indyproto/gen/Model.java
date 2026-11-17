@@ -55,6 +55,9 @@ final class Model {
     this.msg = names.message(d);
     this.builder = names.builder(d);
     this.orBuilder = names.orBuilder(d);
+    if (d.getOptions().getMessageSetWireFormat()) {
+      throw new UnsupportedOperationException("prototype does not support message_set_wire_format (" + d.getFullName() + ")");
+    }
     int bit = 0;
     List<Schema.Field> sf = new ArrayList<>();
     List<String> oneofNames = new ArrayList<>();
@@ -114,7 +117,9 @@ final class Model {
       fields.add(mf);
       if (oneof >= 0) oneofs.get(oneof).members().add(mf);
     }
-    this.schema = new Schema(sf, oneofNames);
+    List<Schema.Range> ranges = new ArrayList<>();
+    for (var r : d.toProto().getExtensionRangeList()) ranges.add(new Schema.Range(r.getStart(), r.getEnd()));
+    this.schema = new Schema(sf, oneofNames, ranges);
   }
 
   /** {message, builder, orBuilder} of a message-typed field; well-known types are stock classes. */
@@ -150,7 +155,6 @@ final class Model {
 
   private static void check(FieldDescriptor fd) {
     String why = null;
-    if (fd.isExtension()) why = "extensions";
     if (why != null) {
       throw new UnsupportedOperationException(
           "prototype does not support " + why + " (" + fd.getFullName() + ")");

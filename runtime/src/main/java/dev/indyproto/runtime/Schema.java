@@ -245,16 +245,30 @@ public final class Schema {
     }
   }
 
+  /** An extension range, {@code end} exclusive (protoc's {@code writeUntil(end)} argument). */
+  public record Range(int start, int end) {}
+
   private final List<Field> fields;
   private final List<Field> declared;
   private final List<String> oneofs;
+  private final List<Range> ranges;
 
   public Schema(List<Field> fields) {
     this(fields, List.of());
   }
 
-  /** {@code fields} in declaration order; {@code oneofs} are the real oneofs' lowerCamel names. */
   public Schema(List<Field> fields, List<String> oneofs) {
+    this(fields, oneofs, List.of());
+  }
+
+  /**
+   * {@code fields} in declaration order; {@code oneofs} are the real oneofs' lowerCamel names;
+   * {@code ranges} the extension ranges (non-empty: an ExtendableMessage).
+   */
+  public Schema(List<Field> fields, List<String> oneofs, List<Range> ranges) {
+    List<Range> r = new ArrayList<>(ranges);
+    r.sort(Comparator.comparingInt(Range::start));
+    this.ranges = List.copyOf(r);
     this.declared = List.copyOf(fields);
     List<Field> sorted = new ArrayList<>(fields);
     sorted.sort(Comparator.comparingInt(Field::number));
@@ -265,6 +279,31 @@ public final class Schema {
   /** Fields in field-number order (wire order). */
   public List<Field> fields() {
     return fields;
+  }
+
+  public List<Range> ranges() {
+    return ranges;
+  }
+
+  public boolean extendable() {
+    return !ranges.isEmpty();
+  }
+
+  /**
+   * protoc's serialization order: fields by number, each extension range written (via the
+   * ExtensionSerializer) just before the first field numbered at or after its start.
+   * Elements are {@link Field}s and {@link Range}s.
+   */
+  public List<Object> wireOrder() {
+    List<Object> out = new ArrayList<>();
+    int i = 0, j = 0;
+    while (i < fields.size() || j < ranges.size()) {
+      if (i == fields.size()) out.add(ranges.get(j++));
+      else if (j == ranges.size()) out.add(fields.get(i++));
+      else if (fields.get(i).number() < ranges.get(j).start()) out.add(fields.get(i++));
+      else out.add(ranges.get(j++));
+    }
+    return out;
   }
 
   /** Fields in declaration order (protoc's hashCode / equals order). */
@@ -308,6 +347,13 @@ public final class Schema {
       if (i > 0) sb.append(';');
       sb.append(declared.get(i).encode());
     }
+    if (!ranges.isEmpty()) {
+      sb.append('|');
+      for (int i = 0; i < ranges.size(); i++) {
+        if (i > 0) sb.append(',');
+        sb.append(ranges.get(i).start()).append('-').append(ranges.get(i).end());
+      }
+    }
     return sb.toString();
   }
 
@@ -319,10 +365,19 @@ public final class Schema {
       if (!o.isEmpty()) oneofs.addAll(List.of(o.split(",")));
       s = s.substring(bar + 1);
     }
+    List<Range> ranges = new ArrayList<>();
+    int bar2 = s.indexOf('|');
+    if (bar2 >= 0) {
+      for (String r : s.substring(bar2 + 1).split(",")) {
+        int dash = r.indexOf('-');
+        ranges.add(new Range(Integer.parseInt(r.substring(0, dash)), Integer.parseInt(r.substring(dash + 1))));
+      }
+      s = s.substring(0, bar2);
+    }
     List<Field> out = new ArrayList<>();
     if (!s.isEmpty()) {
       for (String part : s.split(";")) out.add(Field.decode(part));
     }
-    return new Schema(out, oneofs);
+    return new Schema(out, oneofs, ranges);
   }
 }

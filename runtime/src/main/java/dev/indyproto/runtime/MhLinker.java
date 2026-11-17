@@ -265,6 +265,7 @@ final class MhLinker {
     }
     leaves.add(MethodHandles.filterArguments(H_UFS_SIZE, 0,
         lookup.findVirtual(m, "getUnknownFields", methodType(UnknownFieldSet.class))));
+    if (schema.extendable()) leaves.add(lookup.findVirtual(m, "$extSize", methodType(int.class)).asType(leafType));
     return balance(leaves, (a, b) -> MethodHandles.permuteArguments(
         MethodHandles.filterArguments(H_IADD, 0, a, b), leafType, 0, 0));
   }
@@ -320,6 +321,9 @@ final class MhLinker {
     MethodHandle ufs = lookup.findVirtual(m, "getUnknownFields", methodType(UnknownFieldSet.class))
         .asType(methodType(Object.class, m));
     leaves.add(MethodHandles.filterArguments(H_EQ_O, 0, ufs, ufs));
+    if (schema.extendable()) {
+      leaves.add(lookup.findVirtual(m, "$extEquals", methodType(boolean.class, m)).asType(leafType));
+    }
     return balance(leaves, (a, b) -> MethodHandles.guardWithTest(a, b, fls));
   }
 
@@ -376,6 +380,10 @@ final class MhLinker {
     }
     MethodHandle ufs = lookup.findVirtual(m, "getUnknownFields", methodType(UnknownFieldSet.class))
         .asType(methodType(Object.class, m));
+    if (schema.extendable()) {
+      MethodHandle ext = lookup.findVirtual(m, "$extHash", methodType(int.class, int.class));
+      steps.add(MethodHandles.permuteArguments(ext, methodType(int.class, int.class, m), 1, 0));
+    }
     steps.add(MethodHandles.filterArguments(H_MIX_UFS, 1,
         MethodHandles.filterReturnValue(ufs, H_HASH_O)));
     MethodHandle chain = balance(steps, (a, b) -> MethodHandles.permuteArguments(

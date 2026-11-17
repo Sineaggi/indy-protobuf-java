@@ -49,17 +49,23 @@ class WireAndReflectionTest {
     String json = JsonFormat.printer().print(stock);
     assertEquals(json, JsonFormat.printer().print(parsed));
     Message.Builder jb = Pairs.newBuilder(ic);
-    JsonFormat.parser().merge(json, jb);
     Message.Builder sjb = Pairs.newBuilder(sc);
-    JsonFormat.parser().merge(json, sjb);
-    // (JSON does not preserve -0.0 exactly, so compare against protoc's result, not the input)
-    assertArrayEquals(sjb.build().toByteArray(), jb.build().toByteArray(), "json parse");
+    try {
+      JsonFormat.parser().merge(json, sjb);
+      JsonFormat.parser().merge(json, jb);
+      // (JSON does not preserve -0.0 exactly, so compare against protoc's result, not the input)
+      assertArrayEquals(sjb.build().toByteArray(), jb.build().toByteArray(), "json parse");
+    } catch (com.google.protobuf.InvalidProtocolBufferException e) {
+      // JsonFormat prints extensions but cannot parse them back: the same for both
+      var ie = assertThrows(com.google.protobuf.InvalidProtocolBufferException.class, () -> JsonFormat.parser().merge(json, jb));
+      assertEquals(e.getMessage(), ie.getMessage());
+    }
     Message.Builder tb = Pairs.newBuilder(ic);
-    TextFormat.merge(TextFormat.printer().printToString(stock), tb);
+    TextFormat.merge(TextFormat.printer().printToString(stock), Pairs.registry(ic), tb);
     assertEquals(parsed, tb.build());
 
     // DynamicMessage built from the indy descriptor
-    DynamicMessage dyn = DynamicMessage.parseFrom(parsed.getDescriptorForType(), bytes);
+    DynamicMessage dyn = DynamicMessage.parseFrom(parsed.getDescriptorForType(), bytes, Pairs.registry(ic));
     assertArrayEquals(bytes, dyn.toByteArray());
     assertEquals(parsed, dyn);
     assertEquals(parsed, Pairs.newBuilder(ic).mergeFrom(dyn).build());
@@ -81,16 +87,25 @@ class WireAndReflectionTest {
     parsed.writeDelimitedTo(bos);
     parsed.writeDelimitedTo(bos);
     var in = new ByteArrayInputStream(bos.toByteArray());
-    assertEquals(parsed, parsed.getParserForType().parseDelimitedFrom(in));
-    assertEquals(parsed, parsed.getParserForType().parseDelimitedFrom(in));
+    assertEquals(parsed, parsed.getParserForType().parseDelimitedFrom(in, Pairs.registry(ic)));
+    assertEquals(parsed, parsed.getParserForType().parseDelimitedFrom(in, Pairs.registry(ic)));
 
-    // java serialization (GeneratedMessage.writeReplace -> SerializedForm)
+    // java serialization (GeneratedMessage.writeReplace -> SerializedForm). readResolve parses
+    // without an extension registry, so extensions come back as unknown fields: compare with what
+    // protoc's classes do.
+    Message back = (Message) roundTrip(parsed);
+    assertEquals(parsed.getClass(), back.getClass());
+    assertArrayEquals(((Message) roundTrip(stock)).toByteArray(), back.toByteArray());
+    assertEquals(ic.getMethod("parseFrom", byte[].class).invoke(null, (Object) bytes), back);
+  }
+
+  static Object roundTrip(Object o) throws Exception {
     ByteArrayOutputStream jos = new ByteArrayOutputStream();
     try (var oos = new ObjectOutputStream(jos)) {
-      oos.writeObject(parsed);
+      oos.writeObject(o);
     }
     try (var ois = new ObjectInputStream(new ByteArrayInputStream(jos.toByteArray()))) {
-      assertEquals(parsed, ois.readObject());
+      return ois.readObject();
     }
   }
 

@@ -209,7 +209,18 @@ final class Spinner {
 
   void writeTo(CodeBuilder cb) {
     int m = 0, out = 1;
-    for (Field f : schema.fields()) {
+    int ext = -1;
+    if (schema.extendable()) {
+      ext = cb.allocateLocal(TypeKind.REFERENCE);
+      cb.aload(m).invokevirtual(msg, "$extWriter", mt(CD_Object)).astore(ext);
+    }
+    for (Object item : schema.wireOrder()) {
+      if (item instanceof Schema.Range r) {
+        cb.aload(m).aload(ext).loadConstant(r.end()).aload(out)
+            .invokevirtual(msg, "$extWriteUntil", mt(CD.V, CD_Object, CD.I, CD.COS));
+        continue;
+      }
+      Field f = (Field) item;
       Label skip = cb.newLabel();
       if (f.isMap()) {
         cb.aload(out).loadConstant(f.number()).loadConstant(f.mapKey().ordinal());
@@ -348,6 +359,9 @@ final class Spinner {
       }
       cb.labelBinding(skip);
     }
+    if (schema.extendable()) {
+      cb.iload(size).aload(m).invokevirtual(msg, "$extSize", mt(CD.I)).iadd().istore(size);
+    }
     cb.iload(size).aload(m).invokevirtual(msg, "getUnknownFields", mt(CD.UNKNOWN_FIELD_SET))
         .invokevirtual(CD.UNKNOWN_FIELD_SET, "getSerializedSize", mt(CD.I)).iadd().ireturn();
   }
@@ -442,6 +456,9 @@ final class Spinner {
     cb.aload(a).invokevirtual(msg, "getUnknownFields", mt(CD.UNKNOWN_FIELD_SET))
         .aload(b).invokevirtual(msg, "getUnknownFields", mt(CD.UNKNOWN_FIELD_SET))
         .invokevirtual(CD.UNKNOWN_FIELD_SET, "equals", mt(CD.Z, CD_Object)).ifeq(notEqual);
+    if (schema.extendable()) {
+      cb.aload(a).aload(b).invokevirtual(msg, "$extEquals", mt(CD.Z, msg)).ifeq(notEqual);
+    }
     cb.iconst_1().ireturn();
     cb.labelBinding(notEqual);
     cb.iconst_0().ireturn();
@@ -514,6 +531,9 @@ final class Spinner {
         cb.invokestatic(CD.RT, "hashOneof", mt(CD.I, CD.I, CD_Object)).iadd().istore(h);
         cb.labelBinding(skip);
       }
+    }
+    if (schema.extendable()) {
+      cb.aload(m).iload(h).invokevirtual(msg, "$extHash", mt(CD.I, CD.I)).istore(h);
     }
     cb.loadConstant(29).iload(h).imul()
         .aload(m).invokevirtual(msg, "getUnknownFields", mt(CD.UNKNOWN_FIELD_SET))
@@ -801,6 +821,9 @@ final class Spinner {
         if (f.presence()) setBit(cb, builder, b, f);
       }
       cb.labelBinding(skip);
+    }
+    if (schema.extendable()) {
+      cb.aload(b).aload(o).invokevirtual(builder, "$mergeExtensions", mt(CD.V, msg));
     }
     cb.aload(b).aload(o).invokevirtual(msg, "getUnknownFields", mt(CD.UNKNOWN_FIELD_SET))
         .invokevirtual(builder, "mergeUnknownFields", mt(CD.GM_BUILDER, CD.UNKNOWN_FIELD_SET)).pop();

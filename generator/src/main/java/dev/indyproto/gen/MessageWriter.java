@@ -117,10 +117,22 @@ final class MessageWriter {
 
   // ---- registration (hierarchy is needed before any class is written) -------------------------
 
+  private ClassDesc superMsg() {
+    return m.extendable() ? CD.EXTENDABLE_MESSAGE : CD.GENERATED_MESSAGE;
+  }
+
+  private ClassDesc superBuilder() {
+    return m.extendable() ? CD.EXTENDABLE_BUILDER : CD.GM_BUILDER;
+  }
+
+  private ClassDesc orBuilderSuper() {
+    return m.extendable() ? CD.EXTENDABLE_MESSAGE_OR_BUILDER : CD.MESSAGE_OR_BUILDER;
+  }
+
   void register() {
-    h.register(m.msg, CD.GENERATED_MESSAGE, List.of(m.orBuilder), false);
-    h.register(m.builder, CD.GM_BUILDER, List.of(m.orBuilder), false);
-    h.register(m.orBuilder, CD_Object, List.of(CD.MESSAGE_OR_BUILDER), true);
+    h.register(m.msg, superMsg(), List.of(m.orBuilder), false);
+    h.register(m.builder, superBuilder(), List.of(m.orBuilder), false);
+    h.register(m.orBuilder, CD_Object, List.of(orBuilderSuper()), true);
   }
 
   // ==============================================================================================
@@ -129,9 +141,12 @@ final class MessageWriter {
   byte[] writeOrBuilder() {
     return h.classFile().build(m.orBuilder, clb -> {
       clb.withFlags(AccessFlag.PUBLIC, AccessFlag.INTERFACE, AccessFlag.ABSTRACT);
-      clb.withInterfaceSymbols(CD.MESSAGE_OR_BUILDER);
+      clb.withInterfaceSymbols(orBuilderSuper());
       gen.innerClasses(clb, m.orBuilder);
       Cls c = new Cls(m.orBuilder, clb);
+      if (m.extendable()) {
+        c.classSignature("Ljava/lang/Object;" + d(CD.EXTENDABLE_MESSAGE_OR_BUILDER).replace(";", "<" + d(m.msg) + ">;"));
+      }
       readAccessors(c, null, true);
       h.addMethods(m.orBuilder, c.decls);
     });
@@ -432,11 +447,15 @@ final class MessageWriter {
   byte[] writeMessage() {
     return h.classFile().build(m.msg, clb -> {
       clb.withFlags(AccessFlag.PUBLIC, AccessFlag.FINAL, AccessFlag.SUPER);
-      clb.withSuperclass(CD.GENERATED_MESSAGE);
+      clb.withSuperclass(superMsg());
       clb.withInterfaceSymbols(m.orBuilder);
       gen.innerClasses(clb, m.msg);
       gen.nest(clb, m.msg);
       Cls c = new Cls(m.msg, clb);
+      if (m.extendable()) {
+        c.classSignature(d(CD.EXTENDABLE_MESSAGE).replace(";", "<" + d(m.msg) + ">;") + d(m.orBuilder));
+        extensionHooks(c);
+      }
 
       clb.withField("serialVersionUID", CD.J, fb -> fb
           .withFlags(ClassFile.ACC_PRIVATE | ClassFile.ACC_STATIC | ClassFile.ACC_FINAL)
@@ -446,8 +465,13 @@ final class MessageWriter {
       // filled from the same condy constant that getDefaultInstance() returns.
       clb.withField("DEFAULT_INSTANCE", m.msg,
           ClassFile.ACC_PRIVATE | ClassFile.ACC_STATIC | ClassFile.ACC_FINAL);
-      clb.withMethodBody(ConstantDescs.CLASS_INIT_NAME, MTD_void, ClassFile.ACC_STATIC, cb -> cb
-          .ldc(defaultConst()).putstatic(m.msg, "DEFAULT_INSTANCE", m.msg).return_());
+      Extensions ex = new Extensions(names);
+      for (var ext : m.d.getExtensions()) ex.declare(clb, ext);
+      clb.withMethodBody(ConstantDescs.CLASS_INIT_NAME, MTD_void, ClassFile.ACC_STATIC, cb -> {
+        cb.ldc(defaultConst()).putstatic(m.msg, "DEFAULT_INSTANCE", m.msg);
+        ex.initMessageScoped(cb, m.msg, m.d.getExtensions());
+        cb.return_();
+      });
       for (int w = 0; w < m.schema.bitWords(); w++) {
         clb.withField("bitField" + w + "_", CD.I, ClassFile.ACC_PRIVATE);
       }
@@ -470,11 +494,12 @@ final class MessageWriter {
 
       // constructors
       c.method(INIT_NAME, PRIVATE, mt(CD.V, CD.GM_BUILDER), cb -> cb
-          .aload(0).aload(1).invokespecial(CD.GENERATED_MESSAGE, INIT_NAME, mt(CD.V, CD.GM_BUILDER))
+          .aload(0).aload(1).checkcast(m.extendable() ? CD.EXTENDABLE_BUILDER : CD.GM_BUILDER)
+          .invokespecial(superMsg(), INIT_NAME, mt(CD.V, m.extendable() ? CD.EXTENDABLE_BUILDER : CD.GM_BUILDER))
           .aload(0).iconst_m1().putfield(m.msg, "memoizedIsInitialized", CD.B)
           .return_());
       c.method(INIT_NAME, PRIVATE, MTD_void, cb -> {
-        cb.aload(0).invokespecial(CD.GENERATED_MESSAGE, INIT_NAME, MTD_void);
+        cb.aload(0).invokespecial(superMsg(), INIT_NAME, MTD_void);
         cb.aload(0).iconst_m1().putfield(m.msg, "memoizedIsInitialized", CD.B);
         initDefaults(cb, m.msg);
         cb.return_();
@@ -653,12 +678,15 @@ final class MessageWriter {
     ClassDesc B = m.builder;
     return h.classFile().build(B, clb -> {
       clb.withFlags(AccessFlag.PUBLIC, AccessFlag.FINAL, AccessFlag.SUPER);
-      clb.withSuperclass(CD.GM_BUILDER);
+      clb.withSuperclass(superBuilder());
       clb.withInterfaceSymbols(m.orBuilder);
       gen.innerClasses(clb, B);
       gen.nest(clb, B);
       Cls c = new Cls(B, clb);
-      c.classSignature("Lcom/google/protobuf/GeneratedMessage$Builder<" + d(B) + ">;" + d(m.orBuilder));
+      c.classSignature(m.extendable()
+          ? d(CD.EXTENDABLE_BUILDER).replace(";", "<" + d(m.msg) + d(B) + ">;") + d(m.orBuilder)
+          : "Lcom/google/protobuf/GeneratedMessage$Builder<" + d(B) + ">;" + d(m.orBuilder));
+      if (m.extendable()) builderExtensionMethods(c);
 
       for (int w = 0; w < m.schema.bitWords(); w++) {
         clb.withField("bitField" + w + "_", CD.I, ClassFile.ACC_PRIVATE);
@@ -681,17 +709,17 @@ final class MessageWriter {
       c.method("internalGetFieldAccessorTable", PROTECTED, mt(CD.GM_FIELD_ACCESSOR_TABLE), cb ->
           cb.ldc(tableConst()).areturn());
       c.method(INIT_NAME, PRIVATE, MTD_void, cb -> {
-        cb.aload(0).invokespecial(CD.GM_BUILDER, INIT_NAME, MTD_void);
+        cb.aload(0).invokespecial(superBuilder(), INIT_NAME, MTD_void);
         initDefaults(cb, B);
         cb.return_();
       });
       c.method(INIT_NAME, PRIVATE, mt(CD.V, CD.GM_BUILDER_PARENT), cb -> {
-        cb.aload(0).aload(1).invokespecial(CD.GM_BUILDER, INIT_NAME, mt(CD.V, CD.GM_BUILDER_PARENT));
+        cb.aload(0).aload(1).invokespecial(superBuilder(), INIT_NAME, mt(CD.V, CD.GM_BUILDER_PARENT));
         initDefaults(cb, B);
         cb.return_();
       });
       c.method("clear", PUBLIC, mt(B), cb -> {
-        cb.aload(0).invokespecial(CD.GM_BUILDER, "clear", mt(CD.GM_BUILDER)).pop();
+        cb.aload(0).invokespecial(superBuilder(), "clear", mt(superBuilder())).pop();
         cb.aload(0);
         indy(cb, "clear", mt(CD.V, B));
         cb.aload(0).areturn();
@@ -842,6 +870,49 @@ final class MessageWriter {
           && mayHaveRequired(f.getMessageType(), seen)) return true;
     }
     return false;
+  }
+
+  /** Private hooks so link-time nestmates can reach the protected extension machinery. */
+  private void extensionHooks(Cls c) {
+    ClassDesc M = m.msg, EM = CD.EXTENDABLE_MESSAGE;
+    c.method("$extWriter", PRIVATE, mt(CD_Object), cb -> cb
+        .aload(0).invokevirtual(M, "newExtensionSerializer", mt(CD.EXTENSION_SERIALIZER)).areturn());
+    c.method("$extWriteUntil", PRIVATE, mt(CD.V, CD_Object, CD.I, CD.COS), null, List.of(CD.IO_EXCEPTION), cb -> cb
+        .aload(1).checkcast(CD.EXTENSION_SERIALIZER).iload(2).aload(3)
+        .invokeinterface(CD.EXTENSION_SERIALIZER, "writeUntil", mt(CD.V, CD.I, CD.COS)).return_());
+    c.method("$extSize", PRIVATE, mt(CD.I), cb -> cb
+        .aload(0).invokevirtual(M, "extensionsSerializedSize", mt(CD.I)).ireturn());
+    c.method("$extEquals", PRIVATE, mt(CD.Z, M), cb -> cb
+        .aload(0).aload(1).invokevirtual(M, "extensionsEquals", mt(CD.Z, EM)).ireturn());
+    c.method("$extHash", PRIVATE, mt(CD.I, CD.I), cb -> cb
+        .iload(1).aload(0).invokevirtual(M, "getExtensionFields", mt(CD.MAP))
+        .invokestatic(M, "hashFields", mt(CD.I, CD.I, CD.MAP)).ireturn());
+  }
+
+  /** protoc's typed setExtension / addExtension / clearExtension overloads, and the merge hook. */
+  private void builderExtensionMethods(Cls c) {
+    ClassDesc B = m.builder, GE = CD.GENERATED_EXTENSION, EB = CD.EXTENDABLE_BUILDER;
+    ClassDesc ext = ClassDesc.of("com.google.protobuf.ExtensionLite");
+    String ge = "Lcom/google/protobuf/GeneratedMessage$GeneratedExtension<" + d(m.msg);
+    String single = ge + "TType;>;", list = ge + "Ljava/util/List<TType;>;>;";
+    c.method("setExtension", PUBLIC, mt(B, GE, CD_Object),
+        "<Type:Ljava/lang/Object;>(" + single + "TType;)" + d(B), cb -> cb
+            .aload(0).aload(1).aload(2)
+            .invokespecial(EB, "setExtension", mt(EB, ext, CD_Object)).checkcast(B).areturn());
+    c.method("setExtension", PUBLIC, mt(B, GE, CD.I, CD_Object),
+        "<Type:Ljava/lang/Object;>(" + list + "ITType;)" + d(B), cb -> cb
+            .aload(0).aload(1).iload(2).aload(3)
+            .invokespecial(EB, "setExtension", mt(EB, ext, CD.I, CD_Object)).checkcast(B).areturn());
+    c.method("addExtension", PUBLIC, mt(B, GE, CD_Object),
+        "<Type:Ljava/lang/Object;>(" + list + "TType;)" + d(B), cb -> cb
+            .aload(0).aload(1).aload(2)
+            .invokespecial(EB, "addExtension", mt(EB, ext, CD_Object)).checkcast(B).areturn());
+    c.method("clearExtension", PUBLIC, mt(B, GE),
+        "<Type:Ljava/lang/Object;>(" + single + ")" + d(B), cb -> cb
+            .aload(0).aload(1)
+            .invokespecial(EB, "clearExtension", mt(EB, ext)).checkcast(B).areturn());
+    c.method("$mergeExtensions", PRIVATE, mt(CD.V, m.msg), cb -> cb
+        .aload(0).aload(1).invokevirtual(B, "mergeExtensionFields", mt(CD.V, CD.EXTENDABLE_MESSAGE)).return_());
   }
 
   void onChanged(CodeBuilder cb) {

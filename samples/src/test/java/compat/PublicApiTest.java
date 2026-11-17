@@ -32,7 +32,8 @@ class PublicApiTest {
         "sample.SampleProto", "sample.legacy.Legacy", "bench.Bench", "wide.Wide$Builder",
         "shapes.Shape$KindCase", "shapes.Shape$SecondCase", "shapes.Shapes2$Legacy$PickCase",
         "shapes.Shapes2", "shapes.Unit", "shapes.Shapes2$Level", "shapes.Shapes",
-        "shapes.full.Full2", "shapes.full.Full2$Color", "shapes.full.Full2$Full$PickCase"));
+        "shapes.full.Full2", "shapes.full.Full2$Color", "shapes.full.Full2$Full$PickCase",
+        "shapes.ext.Ext2", "shapes.ext.Ext2$EGroup", "shapes.ext.Ext2$EGroup$Builder"));
     return out.stream().distinct();
   }
 
