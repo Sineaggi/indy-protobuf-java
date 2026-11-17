@@ -10,6 +10,7 @@ import dev.indyproto.runtime.Schema.Kind;
 import dev.indyproto.runtime.Schema.ListKind;
 import java.lang.classfile.ClassBuilder;
 import java.lang.classfile.ClassFile;
+import java.lang.classfile.attribute.SourceFileAttribute;
 import java.lang.classfile.ClassHierarchyResolver;
 import java.lang.classfile.CodeBuilder;
 import java.lang.classfile.Label;
@@ -78,9 +79,11 @@ final class Spinner {
       if (NO_STACK_MAPS) clb.withVersion(ClassFile.JAVA_6_VERSION, 0);
       clb.withFlags(AccessFlag.FINAL, AccessFlag.SYNTHETIC);
       clb.withSuperclass(superclass);
+      clb.with(SourceFileAttribute.of(simpleBinaryName(lookup.lookupClass()) + " field"));
       members.accept(clb);
     });
     long t1 = System.nanoTime();
+    Dump.write(self, bytes);
     try {
       return lookup.defineHiddenClass(bytes, true, MethodHandles.Lookup.ClassOption.NESTMATE);
     } catch (IllegalAccessException e) {
@@ -92,6 +95,20 @@ final class Spinner {
 
   // --------------------------------------------------------------------------------------------
   // helpers
+
+  /**
+   * Line numbers are proto field numbers (SourceFile names the message), so a stack trace through
+   * spun code reads {@code at ...$$Indy$Ops.writeTo(Point field:2)}. 0 is code for no single
+   * field (extensions, unknown fields); field numbers above 65535 show as 65535.
+   */
+  private static String simpleBinaryName(Class<?> c) {
+    String n = c.getName();
+    return n.substring(n.lastIndexOf('.') + 1);
+  }
+
+  private static void line(CodeBuilder cb, Field f) {
+    cb.lineNumber(Math.min(f.number(), 65535));
+  }
 
   private static MethodTypeDesc mt(ClassDesc ret, ClassDesc... params) {
     return MethodTypeDesc.of(ret, params);
@@ -216,11 +233,13 @@ final class Spinner {
     }
     for (Object item : schema.wireOrder()) {
       if (item instanceof Schema.Range r) {
+        cb.lineNumber(0);
         cb.aload(m).aload(ext).loadConstant(r.end()).aload(out)
             .invokevirtual(msg, "$extWriteUntil", mt(CD.V, CD_Object, CD.I, CD.COS));
         continue;
       }
       Field f = (Field) item;
+      line(cb, f);
       Label skip = cb.newLabel();
       if (f.isMap()) {
         cb.aload(out).loadConstant(f.number()).loadConstant(f.mapKey().ordinal());
@@ -266,6 +285,7 @@ final class Spinner {
       }
       cb.labelBinding(skip);
     }
+    cb.lineNumber(0);
     cb.aload(m).invokevirtual(msg, "getUnknownFields", mt(CD.UNKNOWN_FIELD_SET))
         .aload(out).invokevirtual(CD.UNKNOWN_FIELD_SET, "writeTo", mt(CD.V, CD.COS));
     cb.return_();
@@ -289,6 +309,7 @@ final class Spinner {
     int size = cb.allocateLocal(TypeKind.INT);
     cb.iconst_0().istore(size);
     for (Field f : schema.fields()) {
+      line(cb, f);
       Label skip = cb.newLabel();
       if (f.isMap()) {
         cb.iload(size).loadConstant(f.number());
@@ -359,6 +380,7 @@ final class Spinner {
       }
       cb.labelBinding(skip);
     }
+    cb.lineNumber(0);
     if (schema.extendable()) {
       cb.iload(size).aload(m).invokevirtual(msg, "$extSize", mt(CD.I)).iadd().istore(size);
     }
@@ -382,6 +404,7 @@ final class Spinner {
     int a = 0, b = 1;
     Label notEqual = cb.newLabel();
     for (Field f : schema.fields()) {
+      line(cb, f);
       Label next = cb.newLabel();
       if (f.inOneof()) continue;
       if (f.isMap()) {
@@ -444,6 +467,7 @@ final class Spinner {
       String cf = schema.oneofCaseField(i);
       cb.aload(a).getfield(msg, cf, CD.I).aload(b).getfield(msg, cf, CD.I).if_icmpne(notEqual);
       for (Field f : schema.oneofMembers(i)) {
+        line(cb, f);
         Label next = cb.newLabel();
         ifNotCase(cb, msg, a, f, next);
         cb.loadConstant(f.wireKind());
@@ -453,9 +477,11 @@ final class Spinner {
         cb.labelBinding(next);
       }
     }
+    cb.lineNumber(0);
     cb.aload(a).invokevirtual(msg, "getUnknownFields", mt(CD.UNKNOWN_FIELD_SET))
         .aload(b).invokevirtual(msg, "getUnknownFields", mt(CD.UNKNOWN_FIELD_SET))
         .invokevirtual(CD.UNKNOWN_FIELD_SET, "equals", mt(CD.Z, CD_Object)).ifeq(notEqual);
+    cb.lineNumber(0);
     if (schema.extendable()) {
       cb.aload(a).aload(b).invokevirtual(msg, "$extEquals", mt(CD.Z, msg)).ifeq(notEqual);
     }
@@ -474,6 +500,7 @@ final class Spinner {
         .invokestatic(msg, "getDescriptor", mt(CD.DESCRIPTOR))
         .invokevirtual(CD_Object, "hashCode", mt(CD.I)).iadd().istore(h);
     for (Field f : schema.declared()) {
+      line(cb, f);
       Label skip = cb.newLabel();
       if (f.inOneof()) continue;
       if (f.isMap()) {
@@ -523,6 +550,7 @@ final class Spinner {
     }
     for (int i = 0; i < schema.oneofs().size(); i++) {
       for (Field f : schema.oneofMembers(i)) {
+        line(cb, f);
         Label skip = cb.newLabel();
         ifNotCase(cb, msg, m, f, skip);
         cb.loadConstant(53).loadConstant(37).iload(h).imul().loadConstant(f.number()).iadd().imul();
@@ -532,6 +560,7 @@ final class Spinner {
         cb.labelBinding(skip);
       }
     }
+    cb.lineNumber(0);
     if (schema.extendable()) {
       cb.aload(m).iload(h).invokevirtual(msg, "$extHash", mt(CD.I, CD.I)).istore(h);
     }
@@ -565,6 +594,7 @@ final class Spinner {
         cases.add(SwitchCase.of(f.tag(), l));
         bodies.add(() -> {
           tb.labelBinding(l);
+          line(tb, f);
           if (f.isMap()) {
             readMapEntry(tb, f, b, in, reg, ov, lv);
           } else {
@@ -753,6 +783,7 @@ final class Spinner {
   void mergeFromMessage(CodeBuilder cb) {
     int b = 0, o = 1;
     for (Field f : schema.fields()) {
+      line(cb, f);
       Label skip = cb.newLabel();
       if (f.isMap()) {
         getField(cb, msg, o, f);
@@ -822,9 +853,11 @@ final class Spinner {
       }
       cb.labelBinding(skip);
     }
+    cb.lineNumber(0);
     if (schema.extendable()) {
       cb.aload(b).aload(o).invokevirtual(builder, "$mergeExtensions", mt(CD.V, msg));
     }
+    cb.lineNumber(0);
     cb.aload(b).aload(o).invokevirtual(msg, "getUnknownFields", mt(CD.UNKNOWN_FIELD_SET))
         .invokevirtual(builder, "mergeUnknownFields", mt(CD.GM_BUILDER, CD.UNKNOWN_FIELD_SET)).pop();
     cb.aload(b).invokevirtual(builder, "$onChanged", mt(CD.V));
@@ -845,6 +878,7 @@ final class Spinner {
       cb.aload(r).aload(b).getfield(builder, cf, CD.I).putfield(msg, cf, CD.I);
       cb.aload(r).aload(b).getfield(builder, vf, CD_Object).putfield(msg, vf, CD_Object);
       for (Field f : schema.oneofMembers(i)) {
+        line(cb, f);
         if (f.kind() != Kind.MESSAGE) continue;
         Label skip = cb.newLabel();
         ifNotCase(cb, builder, b, f, skip);
@@ -856,6 +890,7 @@ final class Spinner {
       }
     }
     for (Field f : schema.fields()) {
+      line(cb, f);
       if (f.inOneof()) continue;
       if (f.isMap()) {
         if (f.mapOfMessages()) {
@@ -938,6 +973,7 @@ final class Spinner {
       cb.aload(b).iconst_0().putfield(builder, schema.oneofCaseField(i), CD.I);
       cb.aload(b).aconst_null().putfield(builder, schema.oneofValueField(i), CD_Object);
       for (Field f : schema.oneofMembers(i)) {
+        line(cb, f);
         if (f.kind() != Kind.MESSAGE) continue;
         Label none = cb.newLabel();
         cb.aload(b).getfield(builder, f.builderFieldName(), CD.SINGLE_FIELD_BUILDER).ifnull(none);
@@ -947,6 +983,7 @@ final class Spinner {
       }
     }
     for (Field f : schema.fields()) {
+      line(cb, f);
       if (f.inOneof()) continue;
       if (f.isMap()) {
         Label none = cb.newLabel();
