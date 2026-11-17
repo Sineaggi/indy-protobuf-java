@@ -51,6 +51,7 @@ final class MhLinker {
 
   private static Class<?> storageClass(Lookup lookup, Field f) throws ReflectiveOperationException {
     if (f.isMap()) return com.google.protobuf.MapField.class;
+    if (f.bytesList()) return Internal.ProtobufList.class;
     if (f.repeated()) {
       return switch (f.kind().list) {
         case INT -> Internal.IntList.class;

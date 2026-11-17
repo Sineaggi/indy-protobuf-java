@@ -295,7 +295,8 @@ final class MessageWriter {
                 body(iface, cb -> {
                   loadList.accept(cb);
                   if (isBuilder) {
-                    cb.invokestatic(CD.COLLECTIONS, "unmodifiableList", mt(CD.LIST, CD.LIST));
+                    // protoc: kinds_.makeImmutable(); return kinds_;
+                    cb.dup().invokeinterface(CD.PROTOBUF_LIST, "makeImmutable", mt(CD.V));
                   }
                   cb.areturn();
                 }));
@@ -348,7 +349,7 @@ final class MessageWriter {
         case BYTES -> {
           c.method("get" + cap + "List", flags, mt(CD.LIST), "()" + listOf(d(CD.BYTE_STRING)), body(iface, cb -> {
             loadList.accept(cb);
-            if (isBuilder) cb.invokestatic(CD.RT, "makeImmutable", mt(CD.LIST, CD.LIST));
+            if (isBuilder) cb.dup().invokeinterface(CD.PROTOBUF_LIST, "makeImmutable", mt(CD.V));
             cb.areturn();
           }));
           c.method("get" + cap, flags, mt(CD.BYTE_STRING, CD.I), body(iface, cb -> {
@@ -616,7 +617,10 @@ final class MessageWriter {
     if (f.repeated()) {
       switch (f.kind().list) {
         case STRING -> cb.invokestatic(CD.LAZY_STRING_LIST, "emptyList", mt(CD.LAZY_STRING_LIST));
-        case OBJECT -> cb.invokestatic(CD.COLLECTIONS, "emptyList", mt(CD.LIST));
+        case OBJECT -> {
+          if (f.s().bytesList()) cb.invokestatic(CD.RT, "emptyBytesList", mt(CD.PROTOBUF_LIST));
+          else cb.invokestatic(CD.COLLECTIONS, "emptyList", mt(CD.LIST));
+        }
         default -> cb.invokestatic(CD.RT, "empty" + f.kind().list.internalListName, mt(f.kind().list.desc()));
       }
       return;
@@ -915,6 +919,16 @@ final class MessageWriter {
         .aload(0).aload(1).invokevirtual(B, "mergeExtensionFields", mt(CD.V, CD.EXTENDABLE_MESSAGE)).return_());
   }
 
+  /** protoc's ensureFooIsMutable for an Internal.ProtobufList: copy when not modifiable. */
+  private static void protobufListEnsure(CodeBuilder cb, ClassDesc B, F f) {
+    Label ok = cb.newLabel();
+    cb.aload(0).getfield(B, f.field(), f.storage()).invokeinterface(CD.PROTOBUF_LIST, "isModifiable", mt(CD.Z)).ifne(ok);
+    cb.aload(0).aload(0).getfield(B, f.field(), f.storage())
+        .invokestatic(CD.RT, "mutableCopy", mt(CD.PROTOBUF_LIST, CD.PROTOBUF_LIST))
+        .checkcast(f.storage()).putfield(B, f.field(), f.storage());
+    cb.labelBinding(ok);
+  }
+
   void onChanged(CodeBuilder cb) {
     cb.aload(0).invokevirtual(m.builder, "onChanged", mt(CD.V));
   }
@@ -1000,16 +1014,15 @@ final class MessageWriter {
                 .putfield(B, f.field(), f.storage());
             cb.labelBinding(ok);
           }
-          case OBJECT -> cb.aload(0).aload(0).getfield(B, f.field(), f.storage())
-              .invokestatic(CD.RT, "ensureMutable", mt(CD.LIST, CD.LIST)).putfield(B, f.field(), f.storage());
-          default -> {
-            Label ok = cb.newLabel();
-            cb.aload(0).getfield(B, f.field(), f.storage()).invokeinterface(CD.PROTOBUF_LIST, "isModifiable", mt(CD.Z)).ifne(ok);
-            cb.aload(0).aload(0).getfield(B, f.field(), f.storage())
-                .invokestatic(CD.RT, "mutableCopy", mt(CD.PROTOBUF_LIST, CD.PROTOBUF_LIST))
-                .checkcast(f.storage()).putfield(B, f.field(), f.storage());
-            cb.labelBinding(ok);
+          case OBJECT -> {
+            if (f.s().bytesList()) {
+              protobufListEnsure(cb, B, f);
+            } else {
+              cb.aload(0).aload(0).getfield(B, f.field(), f.storage())
+                  .invokestatic(CD.RT, "ensureMutable", mt(CD.LIST, CD.LIST)).putfield(B, f.field(), f.storage());
+            }
           }
+          default -> protobufListEnsure(cb, B, f);
         }
         cb.return_();
       });

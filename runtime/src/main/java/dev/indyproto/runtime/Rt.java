@@ -71,6 +71,10 @@ public abstract class Rt extends GeneratedMessage {
 
   // ---- empty / mutable lists ----
 
+  public static Internal.ProtobufList<ByteString> emptyBytesList() {
+    return GeneratedMessage.emptyList(ByteString.class);
+  }
+
   public static Internal.IntList emptyIntList() {
     return GeneratedMessage.emptyIntList();
   }

@@ -29,6 +29,10 @@ class Proto2Test {
     Message.Builder sb = Pairs.newBuilder(sc), ib = Pairs.newBuilder(ic);
     assertEquals(getters(sb), getters(ib), "new builder");
     Message full = Fill.fill(Pairs.newBuilder(sc), 7);
+    // populated messages and builders: values and list implementation classes match too
+    Message iFull = Pairs.parse(ic, full.toByteArray());
+    assertEquals(getters(full), getters(iFull), "populated message");
+    assertEquals(getters(full.toBuilder()), getters(iFull.toBuilder()), "populated builder");
     Message.Builder sCleared = full.toBuilder().clear();
     Message.Builder iCleared = Pairs.parse(ic, full.toByteArray()).toBuilder().clear();
     assertEquals(getters(sCleared), getters(iCleared), "cleared builder");
@@ -71,9 +75,16 @@ class Proto2Test {
     if (v instanceof Double d) return "d" + Double.doubleToRawLongBits(d);
     if (v instanceof Float f) return "f" + Float.floatToRawIntBits(f);
     if (v instanceof com.google.protobuf.ByteString bs) return "bytes:" + java.util.HexFormat.of().formatHex(bs.toByteArray());
-    // list implementation classes are not compared: repeated bytes use Collections.emptyList()
-    // where protoc uses ProtobufArrayList (both immutable; tracked separately)
-    if (v instanceof List<?> l) return "List:" + l;
+    if (v instanceof List<?> l) {
+      StringBuilder sb = new StringBuilder(v.getClass().getName()).append(":[");
+      for (Object x : l) sb.append(render(x)).append(", ");
+      return sb.append(']').toString();
+    }
+    if (v instanceof java.util.Map<?, ?> m) {
+      StringBuilder sb = new StringBuilder(v.getClass().getName()).append(":{");
+      m.forEach((k, x) -> sb.append(render(k)).append('=').append(render(x)).append(", "));
+      return sb.append('}').toString();
+    }
     return v.getClass().getName() + ":" + v;
   }
 
