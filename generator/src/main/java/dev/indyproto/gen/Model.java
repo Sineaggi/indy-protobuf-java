@@ -101,12 +101,14 @@ final class Model {
       } else if (kind == Kind.ENUM) {
         type = names.enumClass(fd.getEnumType());
       }
+      boolean group = fd.getType() == FieldDescriptor.Type.GROUP;
+      boolean customDefault = !repeated && kind != Kind.MESSAGE && fd.hasDefaultValue();
       Schema.Field f = new Schema.Field(
           fd.getNumber(), kind, repeated, repeated && fd.isPacked(), presence,
           kind == Kind.STRING && fd.needsUtf8Check(), closed,
           presence ? bit++ : -1,
-          Names.camel(fd.getName(), true),
-          type == null ? null : Names.internal(type), oneof, null, null);
+          Names.camel(fieldName(fd), true),
+          type == null ? null : Names.internal(type), oneof, null, null, group, customDefault);
       sf.add(f);
       F mf = new F(f, fd, type, tb, tob, kind == Kind.ENUM && !closed);
       fields.add(mf);
@@ -127,6 +129,16 @@ final class Model {
     return new ClassDesc[] {type, tb, tob};
   }
 
+  /** protoc's FieldName(): a group's accessors keep the capitalization of its type name. */
+  static String fieldName(FieldDescriptor fd) {
+    return fd.getType() == FieldDescriptor.Type.GROUP ? fd.getMessageType().getName() : fd.getName();
+  }
+
+  /** Declares extension ranges: ExtendableMessage / ExtendableBuilder. */
+  boolean extendable() {
+    return !d.toProto().getExtensionRangeList().isEmpty();
+  }
+
   boolean hasMaps() {
     for (F f : fields) if (f.isMap()) return true;
     return false;
@@ -138,10 +150,7 @@ final class Model {
 
   private static void check(FieldDescriptor fd) {
     String why = null;
-    if (fd.isRequired()) why = "required fields";
-    else if (fd.hasDefaultValue()) why = "explicit [default = ...]";
-    else if (fd.getType() == FieldDescriptor.Type.GROUP) why = "groups";
-    else if (fd.isExtension()) why = "extensions";
+    if (fd.isExtension()) why = "extensions";
     if (why != null) {
       throw new UnsupportedOperationException(
           "prototype does not support " + why + " (" + fd.getFullName() + ")");
@@ -166,8 +175,7 @@ final class Model {
       case ENUM -> Kind.ENUM;
       case STRING -> Kind.STRING;
       case BYTES -> Kind.BYTES;
-      case MESSAGE -> Kind.MESSAGE;
-      case GROUP -> throw new UnsupportedOperationException("groups");
+      case MESSAGE, GROUP -> Kind.MESSAGE;
     };
   }
 

@@ -13,7 +13,9 @@ final class Pairs {
       "sample.Person", "sample.Address", "sample.Person$Note",
       "sample.legacy.Legacy$Event", "sample.legacy.Legacy$Batch",
       "bench.Order", "bench.LineItem", "wide.Wide", "many.M0", "many.M399",
-      "shapes.Shape", "shapes.Point", "shapes.Shapes2$Legacy");
+      "shapes.Shape", "shapes.Point", "shapes.Shapes2$Legacy",
+      "shapes.full.Full2$Full", "shapes.full.Full2$Inner", "shapes.full.Full2$Plain",
+      "shapes.full.Full2$Full$G", "shapes.full.Full2$Full$R");
 
   static Stream<String> messages() {
     return MESSAGES.stream();

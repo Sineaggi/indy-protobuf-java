@@ -73,7 +73,7 @@ class WireAndReflectionTest {
 
     // builders: copy, clear, default instance
     assertEquals(parsed, parsed.toBuilder().build());
-    assertEquals(parsed.getDefaultInstanceForType(), parsed.toBuilder().clear().build());
+    assertEquals(parsed.getDefaultInstanceForType(), parsed.toBuilder().clear().buildPartial());
     assertSame(parsed.getDefaultInstanceForType(), Pairs.newBuilder(ic).getDefaultInstanceForType());
 
     // delimited streams

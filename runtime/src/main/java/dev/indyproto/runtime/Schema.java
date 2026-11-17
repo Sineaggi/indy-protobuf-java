@@ -111,7 +111,29 @@ public final class Schema {
       String typeInternalName,
       int oneof,
       Kind mapKey,
-      Kind mapValue) {
+      Kind mapValue,
+      boolean group,
+      boolean customDefault) {
+
+    /** {@link #wireKind()} of a group (a MESSAGE field with start/end-group framing). */
+    public static final int GROUP_WIRE_KIND = Kind.values().length;
+
+    public Field(int number, Kind kind, boolean repeated, boolean packed, boolean presence,
+        boolean utf8, boolean closedEnum, int bit, String camelName, String typeInternalName,
+        int oneof, Kind mapKey, Kind mapValue) {
+      this(number, kind, repeated, packed, presence, utf8, closedEnum, bit, camelName,
+          typeInternalName, oneof, mapKey, mapValue, false, false);
+    }
+
+    /** The kind's ordinal, or {@link #GROUP_WIRE_KIND} for groups (passed to Rt helpers). */
+    public int wireKind() {
+      return group ? GROUP_WIRE_KIND : kind.ordinal();
+    }
+
+    /** "Group" or "Message": the CodedOutputStream / CodedInputStream method infix. */
+    public String messageIo() {
+      return group ? "Group" : "Message";
+    }
 
     public Field(int number, Kind kind, boolean repeated, boolean packed, boolean presence,
         boolean utf8, boolean closedEnum, int bit, String camelName, String typeInternalName) {
@@ -180,7 +202,7 @@ public final class Schema {
     }
 
     public int tag() {
-      return (number << 3) | kind.wireType;
+      return (number << 3) | (group ? 3 : kind.wireType);
     }
 
     public int packedTag() {
@@ -194,6 +216,8 @@ public final class Schema {
       if (presence) f.append('h');
       if (utf8) f.append('u');
       if (closedEnum) f.append('c');
+      if (group) f.append('g');
+      if (customDefault) f.append('d');
       return number + ":" + kind.name() + ":" + f + ":" + bit + ":" + camelName + ":"
           + (typeInternalName == null ? "" : typeInternalName) + ":" + oneof + ":"
           + (mapKey == null ? "" : mapKey.name()) + ":" + (mapValue == null ? "" : mapValue.name());
@@ -215,7 +239,9 @@ public final class Schema {
           p[5].isEmpty() ? null : p[5],
           Integer.parseInt(p[6]),
           p[7].isEmpty() ? null : Kind.valueOf(p[7]),
-          p[8].isEmpty() ? null : Kind.valueOf(p[8]));
+          p[8].isEmpty() ? null : Kind.valueOf(p[8]),
+          flags.indexOf('g') >= 0,
+          flags.indexOf('d') >= 0);
     }
   }
 

@@ -139,10 +139,21 @@ public abstract class Rt extends GeneratedMessage {
   // ---- oneof members: the value lives boxed in a shared Object slot ----------------------------
   // The kind is a link-time constant at every call site, so these switches fold after inlining.
 
-  private static final Schema.Kind[] KINDS = Schema.Kind.values();
+  private static final Schema.Kind[] KINDS = wireKinds();
+
+  /** Indexed by {@link Schema.Field#wireKind()}: the kinds, then MESSAGE again for groups. */
+  static Schema.Kind[] wireKinds() {
+    Schema.Kind[] k = java.util.Arrays.copyOf(Schema.Kind.values(), Schema.Kind.values().length + 1);
+    k[k.length - 1] = Schema.Kind.MESSAGE;
+    return k;
+  }
 
   public static void writeOneof(CodedOutputStream out, int n, int kind, Object v)
       throws IOException {
+    if (kind == Schema.Field.GROUP_WIRE_KIND) {
+      out.writeGroup(n, (MessageLite) v);
+      return;
+    }
     switch (KINDS[kind]) {
       case INT32 -> out.writeInt32(n, (Integer) v);
       case INT64 -> out.writeInt64(n, (Long) v);
@@ -166,6 +177,7 @@ public abstract class Rt extends GeneratedMessage {
   }
 
   public static int sizeOneof(int n, int kind, Object v) {
+    if (kind == Schema.Field.GROUP_WIRE_KIND) return CodedOutputStream.computeGroupSize(n, (MessageLite) v);
     return switch (KINDS[kind]) {
       case INT32 -> CodedOutputStream.computeInt32Size(n, (Integer) v);
       case INT64 -> CodedOutputStream.computeInt64Size(n, (Long) v);
@@ -322,5 +334,13 @@ public abstract class Rt extends GeneratedMessage {
   /** What protoc's internalGetMapFieldReflection throws for a number that is not a map field. */
   public static RuntimeException invalidMapField(int number) {
     return new RuntimeException("Invalid map field number: " + number);
+  }
+
+  /** Every element of a repeated message field / message-valued map is initialized. */
+  public static boolean allInitialized(java.util.Collection<?> messages) {
+    for (Object m : messages) {
+      if (!((com.google.protobuf.MessageLiteOrBuilder) m).isInitialized()) return false;
+    }
+    return true;
   }
 }

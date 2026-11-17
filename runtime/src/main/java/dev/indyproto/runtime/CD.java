@@ -33,6 +33,7 @@ public final class CD {
   }
 
   public static final ClassDesc BYTE_STRING = pb("ByteString");
+  public static final ClassDesc MESSAGE_LITE_OR_BUILDER = pb("MessageLiteOrBuilder");
   public static final ClassDesc CIS = pb("CodedInputStream");
   public static final ClassDesc COS = pb("CodedOutputStream");
   public static final ClassDesc ERL = pb("ExtensionRegistryLite");

@@ -47,10 +47,17 @@ final class EnumWriter {
     this.open = !e.isClosed();
     Set<Integer> seen = new HashSet<>();
     for (EnumValueDescriptor v : e.getValues()) {
-      if (!seen.add(v.getNumber())) {
-        throw new UnsupportedOperationException("prototype does not support enum aliases: " + e.getFullName());
-      }
+      (seen.add(v.getNumber()) ? canonical : aliases).add(v);
     }
+  }
+
+  /** First value of each number: the real enum constants. Later ones are aliases (allow_alias). */
+  private final List<EnumValueDescriptor> canonical = new ArrayList<>();
+  private final List<EnumValueDescriptor> aliases = new ArrayList<>();
+
+  private EnumValueDescriptor canonicalOf(EnumValueDescriptor v) {
+    for (EnumValueDescriptor c : canonical) if (c.getNumber() == v.getNumber()) return c;
+    throw new IllegalStateException();
   }
 
   void register() {
@@ -59,7 +66,7 @@ final class EnumWriter {
 
   byte[] write() {
     ClassDesc arr = self.arrayType();
-    List<EnumValueDescriptor> values = e.getValues();
+    List<EnumValueDescriptor> values = canonical;
     return h.classFile().build(self, clb -> {
       clb.withFlags(ClassFile.ACC_PUBLIC | ClassFile.ACC_FINAL | ClassFile.ACC_SUPER | ClassFile.ACC_ENUM);
       clb.withSuperclass(ClassDesc.of("java.lang.Enum"));
@@ -74,21 +81,37 @@ final class EnumWriter {
       for (EnumValueDescriptor v : values) constNames.add(v.getName());
       if (open) constNames.add("UNRECOGNIZED");
       for (String n : constNames) clb.withField(n, self, constFlags);
-      for (EnumValueDescriptor v : values) {
+      for (EnumValueDescriptor a : aliases) {
+        clb.withField(a.getName(), self, ClassFile.ACC_PUBLIC | ClassFile.ACC_STATIC | ClassFile.ACC_FINAL);
+      }
+      for (EnumValueDescriptor v : e.getValues()) {
         clb.withField(v.getName() + "_VALUE", CD.I, fb -> fb
             .withFlags(ClassFile.ACC_PUBLIC | ClassFile.ACC_STATIC | ClassFile.ACC_FINAL)
             .with(ConstantValueAttribute.of(v.getNumber())));
       }
       clb.withField("value", CD.I, ClassFile.ACC_PRIVATE | ClassFile.ACC_FINAL);
+      clb.withField("index", CD.I, ClassFile.ACC_PRIVATE | ClassFile.ACC_FINAL);
+      clb.withField("VALUES", arr, ClassFile.ACC_PRIVATE | ClassFile.ACC_STATIC | ClassFile.ACC_FINAL);
       clb.withField("$VALUES", arr, ClassFile.ACC_PRIVATE | ClassFile.ACC_STATIC | ClassFile.ACC_FINAL | ClassFile.ACC_SYNTHETIC);
 
       clb.withMethodBody(CLASS_INIT_NAME, ConstantDescs.MTD_void, ClassFile.ACC_STATIC, cb -> {
         for (int i = 0; i < constNames.size(); i++) {
           int number = i < values.size() ? values.get(i).getNumber() : -1;
-          cb.new_(self).dup().ldc(constNames.get(i)).loadConstant(i).loadConstant(number)
-              .invokespecial(self, INIT_NAME, mt(CD.V, CD.STRING, CD.I, CD.I))
+          int index = i < values.size() ? values.get(i).getIndex() : -1;
+          cb.new_(self).dup().ldc(constNames.get(i)).loadConstant(i).loadConstant(index).loadConstant(number)
+              .invokespecial(self, INIT_NAME, mt(CD.V, CD.STRING, CD.I, CD.I, CD.I))
               .putstatic(self, constNames.get(i), self);
         }
+        for (EnumValueDescriptor a : aliases) {
+          cb.getstatic(self, canonicalOf(a).getName(), self).putstatic(self, a.getName(), self);
+        }
+        // descriptor index -> constant (aliases map to their canonical constant)
+        List<EnumValueDescriptor> all = e.getValues();
+        cb.loadConstant(all.size()).anewarray(self);
+        for (int i = 0; i < all.size(); i++) {
+          cb.dup().loadConstant(i).getstatic(self, canonicalOf(all.get(i)).getName(), self).aastore();
+        }
+        cb.putstatic(self, "VALUES", arr);
         cb.loadConstant(constNames.size()).anewarray(self);
         for (int i = 0; i < constNames.size(); i++) {
           cb.dup().loadConstant(i).getstatic(self, constNames.get(i), self).aastore();
@@ -97,10 +120,11 @@ final class EnumWriter {
         cb.return_();
       });
 
-      clb.withMethodBody(INIT_NAME, mt(CD.V, CD.STRING, CD.I, CD.I), ClassFile.ACC_PRIVATE, cb -> cb
+      clb.withMethodBody(INIT_NAME, mt(CD.V, CD.STRING, CD.I, CD.I, CD.I), ClassFile.ACC_PRIVATE, cb -> cb
           .aload(0).aload(1).iload(2)
           .invokespecial(ClassDesc.of("java.lang.Enum"), INIT_NAME, mt(CD.V, CD.STRING, CD.I))
-          .aload(0).iload(3).putfield(self, "value", CD.I).return_());
+          .aload(0).iload(3).putfield(self, "index", CD.I)
+          .aload(0).iload(4).putfield(self, "value", CD.I).return_());
 
       c.method("values", PUBLIC | STATIC, mt(arr), cb -> cb
           .getstatic(self, "$VALUES", arr).invokevirtual(arr, "clone", mt(CD_Object)).checkcast(arr).areturn());
@@ -154,7 +178,7 @@ final class EnumWriter {
         }
         cb.invokestatic(self, "getDescriptor", mt(CD.ENUM_DESCRIPTOR))
             .invokevirtual(CD.ENUM_DESCRIPTOR, "getValues", mt(CD.LIST))
-            .aload(0).invokevirtual(self, "ordinal", mt(CD.I))
+            .aload(0).getfield(self, "index", CD.I)
             .invokeinterface(CD.LIST, "get", mt(CD_Object, CD.I))
             .checkcast(CD.ENUM_VALUE_DESCRIPTOR).areturn();
       });
@@ -181,7 +205,7 @@ final class EnumWriter {
           cb.getstatic(self, "UNRECOGNIZED", self).areturn();
           cb.labelBinding(known);
         }
-        cb.getstatic(self, "$VALUES", arr)
+        cb.getstatic(self, "VALUES", arr)
             .aload(0).invokevirtual(CD.ENUM_VALUE_DESCRIPTOR, "getIndex", mt(CD.I))
             .aaload().areturn();
       });

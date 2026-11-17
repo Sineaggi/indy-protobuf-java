@@ -33,12 +33,20 @@ final class Fill {
           if (f.isMapField() && !keys.add(((Message) v).getField(f.getMessageType().findFieldByNumber(1)))) continue;
           b.addRepeatedField(f, v);
         }
-      } else if (r.nextInt(4) != 0) {
-        if (f.getJavaType() == FieldDescriptor.JavaType.MESSAGE && depth > 2) continue;
+      } else if (mustSet(b, f) || r.nextInt(4) != 0) {
+        if (f.getJavaType() == FieldDescriptor.JavaType.MESSAGE && depth > 2 && !mustSet(b, f)) continue;
         b.setField(f, value(b, f, r, depth));
       }
     }
     return b;
+  }
+
+  /**
+   * Required fields, and map values (whose default may itself lack required fields), are always
+   * set, so build() succeeds. Uninitialized messages are covered by RequiredTest.
+   */
+  private static boolean mustSet(Message.Builder b, FieldDescriptor f) {
+    return f.isRequired() || b.getDescriptorForType().getOptions().getMapEntry();
   }
 
   private static Object value(Message.Builder b, FieldDescriptor f, Random r, int depth) {

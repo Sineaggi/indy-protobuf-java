@@ -409,7 +409,9 @@ final class MessageWriter {
     Label ok = cb.newLabel();
     cb.ifnonnull(ok);
     cb.pop();
-    String fallback = f.openEnum() ? "UNRECOGNIZED" : f.fd().getEnumType().getValues().get(0).getName();
+    String fallback = f.openEnum() ? "UNRECOGNIZED"
+        : f.repeated() ? f.fd().getEnumType().getValues().get(0).getName()
+        : ((com.google.protobuf.Descriptors.EnumValueDescriptor) f.fd().getDefaultValue()).getName();
     cb.getstatic(f.type(), fallback, f.type());
     cb.labelBinding(ok);
   }
@@ -469,9 +471,11 @@ final class MessageWriter {
       // constructors
       c.method(INIT_NAME, PRIVATE, mt(CD.V, CD.GM_BUILDER), cb -> cb
           .aload(0).aload(1).invokespecial(CD.GENERATED_MESSAGE, INIT_NAME, mt(CD.V, CD.GM_BUILDER))
+          .aload(0).iconst_m1().putfield(m.msg, "memoizedIsInitialized", CD.B)
           .return_());
       c.method(INIT_NAME, PRIVATE, MTD_void, cb -> {
         cb.aload(0).invokespecial(CD.GENERATED_MESSAGE, INIT_NAME, MTD_void);
+        cb.aload(0).iconst_m1().putfield(m.msg, "memoizedIsInitialized", CD.B);
         initDefaults(cb, m.msg);
         cb.return_();
       });
@@ -485,7 +489,8 @@ final class MessageWriter {
 
       readAccessors(c, m.msg, false);
 
-      c.method("isInitialized", PUBLIC | FINAL, mt(CD.Z), cb -> cb.iconst_1().ireturn());
+      clb.withField("memoizedIsInitialized", CD.B, ClassFile.ACC_PRIVATE);
+      c.method("isInitialized", PUBLIC | FINAL, mt(CD.Z), cb -> isInitialized(cb, m.msg, true));
 
       c.method("writeTo", PUBLIC, mt(CD.V, CD.COS), null, List.of(CD.IO_EXCEPTION), cb -> {
         cb.aload(0).invokevirtual(m.msg, "getSerializedSize", mt(CD.I)).pop();
@@ -561,10 +566,24 @@ final class MessageWriter {
   private void initDefaults(CodeBuilder cb, ClassDesc owner) {
     for (F f : m.fields) {
       if (f.inOneof() || f.isMap()) continue;
-      if (!f.repeated() && f.kind() != Kind.STRING && f.kind() != Kind.BYTES) continue;
+      if (!f.repeated() && f.kind() != Kind.STRING && f.kind() != Kind.BYTES && !f.s().customDefault()) continue;
       cb.aload(0);
       pushDefault(cb, f);
       cb.putfield(owner, f.field(), f.storage());
+    }
+  }
+
+  /** An explicit proto2 {@code [default = ...]}, as protoc's field initializers spell it. */
+  static void pushCustomDefault(CodeBuilder cb, F f) {
+    Object v = f.fd().getDefaultValue();
+    switch (f.kind()) {
+      case STRING -> cb.ldc((String) v);
+      case BYTES -> cb.ldc(new String(((com.google.protobuf.ByteString) v).toByteArray(),
+              java.nio.charset.StandardCharsets.ISO_8859_1))
+          .invokestatic(CD.INTERNAL, "bytesDefaultValue", mt(CD.BYTE_STRING, CD.STRING));
+      case ENUM -> cb.loadConstant(((com.google.protobuf.Descriptors.EnumValueDescriptor) v).getNumber());
+      case BOOL -> cb.loadConstant((Boolean) v ? 1 : 0);
+      default -> cb.loadConstant((java.lang.constant.ConstantDesc) v);
     }
   }
 
@@ -575,6 +594,10 @@ final class MessageWriter {
         case OBJECT -> cb.invokestatic(CD.COLLECTIONS, "emptyList", mt(CD.LIST));
         default -> cb.invokestatic(CD.RT, "empty" + f.kind().list.internalListName, mt(f.kind().list.desc()));
       }
+      return;
+    }
+    if (f.s().customDefault()) {
+      pushCustomDefault(cb, f);
       return;
     }
     switch (f.kind()) {
@@ -677,8 +700,17 @@ final class MessageWriter {
           cb.invokestatic(m.msg, "getDescriptor", mt(CD.DESCRIPTOR)).areturn());
       c.method("getDefaultInstanceForType", PUBLIC, mt(m.msg), cb ->
           cb.invokestatic(m.msg, "getDefaultInstance", mt(m.msg)).areturn());
-      c.method("build", PUBLIC, mt(m.msg), cb ->
-          cb.aload(0).invokevirtual(B, "buildPartial", mt(m.msg)).areturn());
+      c.method("build", PUBLIC, mt(m.msg), cb -> {
+        cb.aload(0).invokevirtual(B, "buildPartial", mt(m.msg));
+        if (mayHaveRequired(m.d)) {
+          Label ok = cb.newLabel();
+          cb.dup().invokevirtual(m.msg, "isInitialized", mt(CD.Z)).ifne(ok);
+          cb.invokestatic(ClassDesc.of("com.google.protobuf.AbstractMessage$Builder"), "newUninitializedMessageException",
+              mt(ClassDesc.of("com.google.protobuf.UninitializedMessageException"), CD.MESSAGE)).athrow();
+          cb.labelBinding(ok);
+        }
+        cb.areturn();
+      });
       c.method("buildPartial", PUBLIC, mt(m.msg), cb -> {
         int r = cb.allocateLocal(TypeKind.REFERENCE);
         cb.new_(m.msg).dup().aload(0).invokespecial(m.msg, INIT_NAME, mt(CD.V, CD.GM_BUILDER)).astore(r);
@@ -705,7 +737,7 @@ final class MessageWriter {
         indy(cb, "mergeFromMessage", mt(CD.V, B, m.msg));
         cb.aload(0).areturn();
       });
-      c.method("isInitialized", PUBLIC | FINAL, mt(CD.Z), cb -> cb.iconst_1().ireturn());
+      c.method("isInitialized", PUBLIC | FINAL, mt(CD.Z), cb -> isInitialized(cb, B, false));
       c.method("mergeFrom", PUBLIC, mt(B, CD.CIS, CD.ERL), null, List.of(CD.IO_EXCEPTION), cb -> {
         Label ok = cb.newLabel();
         cb.aload(2).ifnonnull(ok);
@@ -742,6 +774,74 @@ final class MessageWriter {
       h.addMethods(B, c.decls);
       h.emitBridges(c);
     });
+  }
+
+  /**
+   * protoc's isInitialized(): required fields set, sub-messages that may have required fields
+   * initialized, extensions initialized; memoized on the message.
+   */
+  private void isInitialized(CodeBuilder cb, ClassDesc owner, boolean memo) {
+    Label no = cb.newLabel();
+    String memoField = "memoizedIsInitialized";
+    if (memo) {
+      Label compute = cb.newLabel(), notOne = cb.newLabel();
+      cb.aload(0).getfield(owner, memoField, CD.B).iconst_1().if_icmpne(notOne);
+      cb.iconst_1().ireturn();
+      cb.labelBinding(notOne);
+      cb.aload(0).getfield(owner, memoField, CD.B).ifne(compute);
+      cb.iconst_0().ireturn();
+      cb.labelBinding(compute);
+    }
+    for (F f : m.fields) {
+      if (f.fd().isRequired()) {
+        cb.aload(0).invokevirtual(owner, "has" + f.cap(), mt(CD.Z)).ifeq(no);
+      }
+    }
+    for (F f : m.fields) {
+      if (f.isMap()) {
+        if (f.s().mapValue() != Kind.MESSAGE || !mayHaveRequired(f.fd().getMessageType().findFieldByNumber(2).getMessageType())) continue;
+        cb.aload(0).invokevirtual(owner, "get" + f.cap() + "Map", mt(CD.MAP))
+            .invokeinterface(CD.MAP, "values", mt(ClassDesc.of("java.util.Collection")))
+            .invokestatic(CD.RT, "allInitialized", mt(CD.Z, ClassDesc.of("java.util.Collection"))).ifeq(no);
+        continue;
+      }
+      if (f.kind() != Kind.MESSAGE || !mayHaveRequired(f.fd().getMessageType())) continue;
+      if (f.repeated()) {
+        cb.aload(0).invokevirtual(owner, "get" + f.cap() + "List", mt(CD.LIST))
+            .invokestatic(CD.RT, "allInitialized", mt(CD.Z, ClassDesc.of("java.util.Collection"))).ifeq(no);
+      } else {
+        Label skip = cb.newLabel();
+        cb.aload(0).invokevirtual(owner, "has" + f.cap(), mt(CD.Z)).ifeq(skip);
+        cb.aload(0).invokevirtual(owner, "get" + f.cap(), mt(f.type()))
+            .invokeinterface(CD.MESSAGE_LITE_OR_BUILDER, "isInitialized", mt(CD.Z)).ifeq(no);
+        cb.labelBinding(skip);
+      }
+    }
+    if (m.extendable()) {
+      cb.aload(0).invokevirtual(owner, "extensionsAreInitialized", mt(CD.Z)).ifeq(no);
+    }
+    if (memo) cb.aload(0).iconst_1().putfield(owner, memoField, CD.B);
+    cb.iconst_1().ireturn();
+    cb.labelBinding(no);
+    if (memo) cb.aload(0).iconst_0().putfield(owner, memoField, CD.B);
+    cb.iconst_0().ireturn();
+  }
+
+  /** protoc's HasRequiredFields: required fields reachable through message fields, or extensions. */
+  static boolean mayHaveRequired(com.google.protobuf.Descriptors.Descriptor d) {
+    return mayHaveRequired(d, new java.util.HashSet<>());
+  }
+
+  private static boolean mayHaveRequired(com.google.protobuf.Descriptors.Descriptor d,
+      java.util.Set<com.google.protobuf.Descriptors.Descriptor> seen) {
+    if (!seen.add(d)) return false;
+    if (!d.toProto().getExtensionRangeList().isEmpty()) return true;
+    for (var f : d.getFields()) {
+      if (f.isRequired()) return true;
+      if (f.getJavaType() == com.google.protobuf.Descriptors.FieldDescriptor.JavaType.MESSAGE
+          && mayHaveRequired(f.getMessageType(), seen)) return true;
+    }
+    return false;
   }
 
   void onChanged(CodeBuilder cb) {

@@ -31,7 +31,8 @@ class PublicApiTest {
     out.addAll(List.of("sample.Kind", "sample.legacy.Legacy$Event$Level", "many.Color",
         "sample.SampleProto", "sample.legacy.Legacy", "bench.Bench", "wide.Wide$Builder",
         "shapes.Shape$KindCase", "shapes.Shape$SecondCase", "shapes.Shapes2$Legacy$PickCase",
-        "shapes.Shapes2", "shapes.Unit", "shapes.Shapes2$Level", "shapes.Shapes"));
+        "shapes.Shapes2", "shapes.Unit", "shapes.Shapes2$Level", "shapes.Shapes",
+        "shapes.full.Full2", "shapes.full.Full2$Color", "shapes.full.Full2$Full$PickCase"));
     return out.stream().distinct();
   }
 
