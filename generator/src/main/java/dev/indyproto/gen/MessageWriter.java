@@ -295,7 +295,8 @@ final class MessageWriter {
                 body(iface, cb -> {
                   loadList.accept(cb);
                   if (isBuilder) {
-                    cb.invokestatic(CD.COLLECTIONS, "unmodifiableList", mt(CD.LIST, CD.LIST));
+                    // protoc: kinds_.makeImmutable(); return kinds_;
+                    cb.dup().invokeinterface(CD.PROTOBUF_LIST, "makeImmutable", mt(CD.V));
                   }
                   cb.areturn();
                 }));
@@ -348,7 +349,7 @@ final class MessageWriter {
         case BYTES -> {
           c.method("get" + cap + "List", flags, mt(CD.LIST), "()" + listOf(d(CD.BYTE_STRING)), body(iface, cb -> {
             loadList.accept(cb);
-            if (isBuilder) cb.invokestatic(CD.RT, "makeImmutable", mt(CD.LIST, CD.LIST));
+            if (isBuilder) cb.dup().invokeinterface(CD.PROTOBUF_LIST, "makeImmutable", mt(CD.V));
             cb.areturn();
           }));
           c.method("get" + cap, flags, mt(CD.BYTE_STRING, CD.I), body(iface, cb -> {
@@ -517,13 +518,15 @@ final class MessageWriter {
       clb.withField("memoizedIsInitialized", CD.B, ClassFile.ACC_PRIVATE);
       c.method("isInitialized", PUBLIC | FINAL, mt(CD.Z), cb -> isInitialized(cb, m.msg, true));
 
-      c.method("writeTo", PUBLIC, mt(CD.V, CD.COS), null, List.of(CD.IO_EXCEPTION), cb -> {
+      if (m.messageSet) {
+        messageSetSerialization(c);
+      } else c.method("writeTo", PUBLIC, mt(CD.V, CD.COS), null, List.of(CD.IO_EXCEPTION), cb -> {
         cb.aload(0).invokevirtual(m.msg, "getSerializedSize", mt(CD.I)).pop();
         cb.aload(0).aload(1);
         indy(cb, "writeTo", mt(CD.V, m.msg, CD.COS));
         cb.return_();
       });
-      c.method("getSerializedSize", PUBLIC, mt(CD.I), cb -> {
+      if (!m.messageSet) c.method("getSerializedSize", PUBLIC, mt(CD.I), cb -> {
         Label compute = cb.newLabel();
         cb.aload(0).getfield(m.msg, "memoizedSize", CD.I).iconst_m1().if_icmpeq(compute);
         cb.aload(0).getfield(m.msg, "memoizedSize", CD.I).ireturn();
@@ -616,7 +619,10 @@ final class MessageWriter {
     if (f.repeated()) {
       switch (f.kind().list) {
         case STRING -> cb.invokestatic(CD.LAZY_STRING_LIST, "emptyList", mt(CD.LAZY_STRING_LIST));
-        case OBJECT -> cb.invokestatic(CD.COLLECTIONS, "emptyList", mt(CD.LIST));
+        case OBJECT -> {
+          if (f.s().bytesList()) cb.invokestatic(CD.RT, "emptyBytesList", mt(CD.PROTOBUF_LIST));
+          else cb.invokestatic(CD.COLLECTIONS, "emptyList", mt(CD.LIST));
+        }
         default -> cb.invokestatic(CD.RT, "empty" + f.kind().list.internalListName, mt(f.kind().list.desc()));
       }
       return;
@@ -872,6 +878,33 @@ final class MessageWriter {
     return false;
   }
 
+  /**
+   * MessageSet messages have no fields, so there is nothing to link: emit protoc's code directly.
+   * Parsing needs nothing special, since {@code ExtendableBuilder.parseUnknownField} already
+   * reads MessageSet items when the descriptor says so.
+   */
+  private void messageSetSerialization(Cls c) {
+    ClassDesc M = m.msg;
+    c.method("writeTo", PUBLIC, mt(CD.V, CD.COS), null, List.of(CD.IO_EXCEPTION), cb -> cb
+        .aload(0).invokevirtual(M, "newMessageSetExtensionSerializer", mt(CD.EXTENSION_SERIALIZER))
+        .ldc(Integer.MAX_VALUE).aload(1) // MessageSet type_ids go past 2^29
+        .invokeinterface(CD.EXTENSION_SERIALIZER, "writeUntil", mt(CD.V, CD.I, CD.COS))
+        .aload(0).invokevirtual(M, "getUnknownFields", mt(CD.UNKNOWN_FIELD_SET))
+        .aload(1).invokevirtual(CD.UNKNOWN_FIELD_SET, "writeAsMessageSetTo", mt(CD.V, CD.COS))
+        .return_());
+    c.method("getSerializedSize", PUBLIC, mt(CD.I), cb -> {
+      Label compute = cb.newLabel();
+      cb.aload(0).getfield(M, "memoizedSize", CD.I).iconst_m1().if_icmpeq(compute);
+      cb.aload(0).getfield(M, "memoizedSize", CD.I).ireturn();
+      cb.labelBinding(compute);
+      cb.aload(0)
+          .aload(0).invokevirtual(M, "extensionsSerializedSizeAsMessageSet", mt(CD.I))
+          .aload(0).invokevirtual(M, "getUnknownFields", mt(CD.UNKNOWN_FIELD_SET))
+          .invokevirtual(CD.UNKNOWN_FIELD_SET, "getSerializedSizeAsMessageSet", mt(CD.I))
+          .iadd().dup_x1().putfield(M, "memoizedSize", CD.I).ireturn();
+    });
+  }
+
   /** Private hooks so link-time nestmates can reach the protected extension machinery. */
   private void extensionHooks(Cls c) {
     ClassDesc M = m.msg, EM = CD.EXTENDABLE_MESSAGE;
@@ -913,6 +946,16 @@ final class MessageWriter {
             .invokespecial(EB, "clearExtension", mt(EB, ext)).checkcast(B).areturn());
     c.method("$mergeExtensions", PRIVATE, mt(CD.V, m.msg), cb -> cb
         .aload(0).aload(1).invokevirtual(B, "mergeExtensionFields", mt(CD.V, CD.EXTENDABLE_MESSAGE)).return_());
+  }
+
+  /** protoc's ensureFooIsMutable for an Internal.ProtobufList: copy when not modifiable. */
+  private static void protobufListEnsure(CodeBuilder cb, ClassDesc B, F f) {
+    Label ok = cb.newLabel();
+    cb.aload(0).getfield(B, f.field(), f.storage()).invokeinterface(CD.PROTOBUF_LIST, "isModifiable", mt(CD.Z)).ifne(ok);
+    cb.aload(0).aload(0).getfield(B, f.field(), f.storage())
+        .invokestatic(CD.RT, "mutableCopy", mt(CD.PROTOBUF_LIST, CD.PROTOBUF_LIST))
+        .checkcast(f.storage()).putfield(B, f.field(), f.storage());
+    cb.labelBinding(ok);
   }
 
   void onChanged(CodeBuilder cb) {
@@ -1000,16 +1043,15 @@ final class MessageWriter {
                 .putfield(B, f.field(), f.storage());
             cb.labelBinding(ok);
           }
-          case OBJECT -> cb.aload(0).aload(0).getfield(B, f.field(), f.storage())
-              .invokestatic(CD.RT, "ensureMutable", mt(CD.LIST, CD.LIST)).putfield(B, f.field(), f.storage());
-          default -> {
-            Label ok = cb.newLabel();
-            cb.aload(0).getfield(B, f.field(), f.storage()).invokeinterface(CD.PROTOBUF_LIST, "isModifiable", mt(CD.Z)).ifne(ok);
-            cb.aload(0).aload(0).getfield(B, f.field(), f.storage())
-                .invokestatic(CD.RT, "mutableCopy", mt(CD.PROTOBUF_LIST, CD.PROTOBUF_LIST))
-                .checkcast(f.storage()).putfield(B, f.field(), f.storage());
-            cb.labelBinding(ok);
+          case OBJECT -> {
+            if (f.s().bytesList()) {
+              protobufListEnsure(cb, B, f);
+            } else {
+              cb.aload(0).aload(0).getfield(B, f.field(), f.storage())
+                  .invokestatic(CD.RT, "ensureMutable", mt(CD.LIST, CD.LIST)).putfield(B, f.field(), f.storage());
+            }
           }
+          default -> protobufListEnsure(cb, B, f);
         }
         cb.return_();
       });

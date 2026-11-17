@@ -29,6 +29,10 @@ class Proto2Test {
     Message.Builder sb = Pairs.newBuilder(sc), ib = Pairs.newBuilder(ic);
     assertEquals(getters(sb), getters(ib), "new builder");
     Message full = Fill.fill(Pairs.newBuilder(sc), 7);
+    // populated messages and builders: values and list implementation classes match too
+    Message iFull = Pairs.parse(ic, full.toByteArray());
+    assertEquals(getters(full), getters(iFull), "populated message");
+    assertEquals(getters(full.toBuilder()), getters(iFull.toBuilder()), "populated builder");
     Message.Builder sCleared = full.toBuilder().clear();
     Message.Builder iCleared = Pairs.parse(ic, full.toByteArray()).toBuilder().clear();
     assertEquals(getters(sCleared), getters(iCleared), "cleared builder");
@@ -71,9 +75,16 @@ class Proto2Test {
     if (v instanceof Double d) return "d" + Double.doubleToRawLongBits(d);
     if (v instanceof Float f) return "f" + Float.floatToRawIntBits(f);
     if (v instanceof com.google.protobuf.ByteString bs) return "bytes:" + java.util.HexFormat.of().formatHex(bs.toByteArray());
-    // list implementation classes are not compared: repeated bytes use Collections.emptyList()
-    // where protoc uses ProtobufArrayList (both immutable; tracked separately)
-    if (v instanceof List<?> l) return "List:" + l;
+    if (v instanceof List<?> l) {
+      StringBuilder sb = new StringBuilder(v.getClass().getName()).append(":[");
+      for (Object x : l) sb.append(render(x)).append(", ");
+      return sb.append(']').toString();
+    }
+    if (v instanceof java.util.Map<?, ?> m) {
+      StringBuilder sb = new StringBuilder(v.getClass().getName()).append(":{");
+      m.forEach((k, x) -> sb.append(render(k)).append('=').append(render(x)).append(", "));
+      return sb.append('}').toString();
+    }
     return v.getClass().getName() + ":" + v;
   }
 
@@ -147,6 +158,43 @@ class Proto2Test {
       assertEquals("GREEN", ((com.google.protobuf.ProtocolMessageEnum) c.getField("GREEN").get(null)).getValueDescriptor().getName());
       assertEquals(1, c.getField("CRIMSON_VALUE").getInt(null));
       assertThrows(java.lang.reflect.InvocationTargetException.class, () -> c.getMethod("valueOf", String.class).invoke(null, "CRIMSON"));
+    }
+  }
+
+  @SuppressWarnings({"unchecked", "rawtypes"})
+  private static byte[] messageSetBytes(String prefix) throws Exception {
+    Class<?> set = Class.forName(prefix + "shapes.ext.Ext2$Set");
+    Class<?> item = Class.forName(prefix + "shapes.ext.Ext2$SetItem");
+    Class<?> outer = Class.forName(prefix + "shapes.ext.Ext2");
+    Message.Builder ib = Pairs.newBuilder(item);
+    ib.setField(ib.getDescriptorForType().findFieldByName("v"), 7);
+    ib.setField(ib.getDescriptorForType().findFieldByName("s"), "seven");
+    Message it = ib.build();
+    var b = (com.google.protobuf.GeneratedMessage.ExtendableBuilder) Pairs.newBuilder(set);
+    b.setExtension((com.google.protobuf.ExtensionLite) item.getField("item").get(null), it);
+    b.setExtension((com.google.protobuf.ExtensionLite) outer.getField("farItem").get(null), it);
+    Message.Builder inner = Pairs.newBuilder(Class.forName(prefix + "shapes.full.Full2$Inner"));
+    b.setExtension((com.google.protobuf.ExtensionLite) outer.getField("setInner").get(null), Fill.fill(inner, 3));
+    return b.build().toByteArray();
+  }
+
+  @Test
+  void messageSetWireFormat() throws Exception {
+    byte[] want = messageSetBytes(""), got = messageSetBytes("indy.");
+    assertEquals(java.util.HexFormat.of().formatHex(want), java.util.HexFormat.of().formatHex(got));
+    assertEquals(0x0b, want[0], "starts with a MessageSet item group");
+    for (String prefix : List.of("", "indy.")) {
+      Class<?> set = Class.forName(prefix + "shapes.ext.Ext2$Set");
+      // with the registry: typed extensions, same bytes back
+      Message parsed = Pairs.parse(set, want);
+      assertEquals(3, ((com.google.protobuf.GeneratedMessage.ExtendableMessage<?>) parsed).getAllFields().size());
+      assertArrayEquals(want, parsed.toByteArray());
+      assertEquals(want.length, parsed.getSerializedSize());
+      // without: items stay unknown and are written back as MessageSet items
+      Message raw = (Message) set.getMethod("parseFrom", byte[].class).invoke(null, (Object) want);
+      assertEquals(0, raw.getAllFields().size());
+      assertEquals(want.length, raw.getSerializedSize());
+      assertEquals(java.util.HexFormat.of().formatHex(want), java.util.HexFormat.of().formatHex(raw.toByteArray()));
     }
   }
 }

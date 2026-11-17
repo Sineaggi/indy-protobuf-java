@@ -141,6 +141,11 @@ public final class Schema {
           typeInternalName, -1, null, null);
     }
 
+    /** repeated bytes: an Internal.ProtobufList, as in protoc (message lists are plain Lists). */
+    public boolean bytesList() {
+      return repeated && kind == Kind.BYTES;
+    }
+
     public boolean isMap() {
       return kind == Kind.MAP;
     }
@@ -185,6 +190,7 @@ public final class Schema {
     /** JVM type of the storage field (same on message and builder, except maps of messages). */
     public ClassDesc storageDesc() {
       if (kind == Kind.MAP) return CD.MAP_FIELD;
+      if (bytesList()) return CD.PROTOBUF_LIST;
       if (repeated) {
         return kind.list.desc();
       }

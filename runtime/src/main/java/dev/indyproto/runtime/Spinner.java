@@ -888,7 +888,10 @@ final class Spinner {
           cb.goto_(done);
           cb.labelBinding(useList);
         }
-        if (f.kind().list == ListKind.OBJECT) {
+        if (f.bytesList()) {
+          getField(cb, builder, b, f);
+          cb.invokeinterface(CD.PROTOBUF_LIST, "makeImmutable", mt(CD.V));
+        } else if (f.kind().list == ListKind.OBJECT) {
           cb.aload(b);
           getField(cb, builder, b, f);
           cb.invokestatic(CD.RT, "makeImmutable", mt(CD.LIST, CD.LIST))
@@ -991,7 +994,10 @@ final class Spinner {
     if (f.repeated()) {
       switch (f.kind().list) {
         case STRING -> cb.invokestatic(CD.LAZY_STRING_LIST, "emptyList", mt(CD.LAZY_STRING_LIST));
-        case OBJECT -> cb.invokestatic(CD.COLLECTIONS, "emptyList", mt(CD.LIST));
+        case OBJECT -> {
+          if (f.bytesList()) cb.invokestatic(CD.RT, "emptyBytesList", mt(CD.PROTOBUF_LIST));
+          else cb.invokestatic(CD.COLLECTIONS, "emptyList", mt(CD.LIST));
+        }
         default -> cb.invokestatic(CD.RT, "empty" + f.kind().list.internalListName,
             mt(f.kind().list.desc()));
       }

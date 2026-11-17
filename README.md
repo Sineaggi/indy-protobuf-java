@@ -36,6 +36,8 @@ bench/scripts/jmh.sh                     # steady-state JMH -> bench/build/jmh/
 - `-Dindyproto.stats=true`: print bootstrap and spin timing at exit
 - `-Dindyproto.trace=true`: log each bootstrap
 
+`message_set_wire_format` messages hold only extensions, so their `writeTo` and `getSerializedSize` are emitted directly, as protoc does, with no call site to link.
+
 ## Not supported yet
 
-`message_set_wire_format`, and protobuf-javalite/Android. With `-Dindyproto.strategy=mh`, `writeTo` of extendable messages is still spun as a hidden class, because the extension serializer is a cursor shared across field writes.
+protobuf-javalite/Android. With `-Dindyproto.strategy=mh`, `writeTo` of extendable messages is still spun as a hidden class, because the extension serializer is a cursor shared across field writes.
