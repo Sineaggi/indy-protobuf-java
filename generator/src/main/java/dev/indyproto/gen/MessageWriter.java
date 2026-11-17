@@ -518,13 +518,15 @@ final class MessageWriter {
       clb.withField("memoizedIsInitialized", CD.B, ClassFile.ACC_PRIVATE);
       c.method("isInitialized", PUBLIC | FINAL, mt(CD.Z), cb -> isInitialized(cb, m.msg, true));
 
-      c.method("writeTo", PUBLIC, mt(CD.V, CD.COS), null, List.of(CD.IO_EXCEPTION), cb -> {
+      if (m.messageSet) {
+        messageSetSerialization(c);
+      } else c.method("writeTo", PUBLIC, mt(CD.V, CD.COS), null, List.of(CD.IO_EXCEPTION), cb -> {
         cb.aload(0).invokevirtual(m.msg, "getSerializedSize", mt(CD.I)).pop();
         cb.aload(0).aload(1);
         indy(cb, "writeTo", mt(CD.V, m.msg, CD.COS));
         cb.return_();
       });
-      c.method("getSerializedSize", PUBLIC, mt(CD.I), cb -> {
+      if (!m.messageSet) c.method("getSerializedSize", PUBLIC, mt(CD.I), cb -> {
         Label compute = cb.newLabel();
         cb.aload(0).getfield(m.msg, "memoizedSize", CD.I).iconst_m1().if_icmpeq(compute);
         cb.aload(0).getfield(m.msg, "memoizedSize", CD.I).ireturn();
@@ -874,6 +876,33 @@ final class MessageWriter {
           && mayHaveRequired(f.getMessageType(), seen)) return true;
     }
     return false;
+  }
+
+  /**
+   * MessageSet messages have no fields, so there is nothing to link: emit protoc's code directly.
+   * Parsing needs nothing special, since {@code ExtendableBuilder.parseUnknownField} already
+   * reads MessageSet items when the descriptor says so.
+   */
+  private void messageSetSerialization(Cls c) {
+    ClassDesc M = m.msg;
+    c.method("writeTo", PUBLIC, mt(CD.V, CD.COS), null, List.of(CD.IO_EXCEPTION), cb -> cb
+        .aload(0).invokevirtual(M, "newMessageSetExtensionSerializer", mt(CD.EXTENSION_SERIALIZER))
+        .ldc(Integer.MAX_VALUE).aload(1) // MessageSet type_ids go past 2^29
+        .invokeinterface(CD.EXTENSION_SERIALIZER, "writeUntil", mt(CD.V, CD.I, CD.COS))
+        .aload(0).invokevirtual(M, "getUnknownFields", mt(CD.UNKNOWN_FIELD_SET))
+        .aload(1).invokevirtual(CD.UNKNOWN_FIELD_SET, "writeAsMessageSetTo", mt(CD.V, CD.COS))
+        .return_());
+    c.method("getSerializedSize", PUBLIC, mt(CD.I), cb -> {
+      Label compute = cb.newLabel();
+      cb.aload(0).getfield(M, "memoizedSize", CD.I).iconst_m1().if_icmpeq(compute);
+      cb.aload(0).getfield(M, "memoizedSize", CD.I).ireturn();
+      cb.labelBinding(compute);
+      cb.aload(0)
+          .aload(0).invokevirtual(M, "extensionsSerializedSizeAsMessageSet", mt(CD.I))
+          .aload(0).invokevirtual(M, "getUnknownFields", mt(CD.UNKNOWN_FIELD_SET))
+          .invokevirtual(CD.UNKNOWN_FIELD_SET, "getSerializedSizeAsMessageSet", mt(CD.I))
+          .iadd().dup_x1().putfield(M, "memoizedSize", CD.I).ireturn();
+    });
   }
 
   /** Private hooks so link-time nestmates can reach the protected extension machinery. */

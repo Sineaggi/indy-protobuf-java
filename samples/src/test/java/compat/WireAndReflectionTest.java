@@ -72,7 +72,10 @@ class WireAndReflectionTest {
 
     // merge semantics: m.mergeFrom(m) == parse(bytes ++ bytes)
     byte[] twice = concat(bytes, bytes);
-    Message mergedStock = stock.toBuilder().mergeFrom(stock).build();
+    // (merge parsed copies on both sides: MessageSet extensions parse lazily, and merging two lazy
+    // values concatenates their bytes, so a built and a parsed message merge to different bytes)
+    Message parsedStock = Pairs.parse(sc, bytes);
+    Message mergedStock = parsedStock.toBuilder().mergeFrom(parsedStock).build();
     Message mergedIndy = parsed.toBuilder().mergeFrom(parsed).build();
     assertArrayEquals(mergedStock.toByteArray(), mergedIndy.toByteArray(), "mergeFrom(message)");
     assertArrayEquals(Pairs.parse(sc, twice).toByteArray(), Pairs.parse(ic, twice).toByteArray(), "parse concat");

@@ -49,14 +49,18 @@ final class Model {
   /** CamelCase names of all oneofs, synthetic ones included (FieldAccessorTable wants them). */
   final List<String> allOneofNames = new ArrayList<>();
   final Schema schema;
+  /** {@code option message_set_wire_format = true}: no fields, extensions in MessageSet items. */
+  final boolean messageSet;
 
   Model(Descriptor d, Names names) {
     this.d = d;
     this.msg = names.message(d);
     this.builder = names.builder(d);
     this.orBuilder = names.orBuilder(d);
-    if (d.getOptions().getMessageSetWireFormat()) {
-      throw new UnsupportedOperationException("prototype does not support message_set_wire_format (" + d.getFullName() + ")");
+    this.messageSet = d.getOptions().getMessageSetWireFormat();
+    if (messageSet && !d.getFields().isEmpty()) {
+      // protoc rejects these too: a MessageSet holds only extensions
+      throw new IllegalArgumentException("message_set_wire_format message has fields (" + d.getFullName() + ")");
     }
     int bit = 0;
     List<Schema.Field> sf = new ArrayList<>();

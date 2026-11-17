@@ -16,7 +16,8 @@ final class Pairs {
       "shapes.Shape", "shapes.Point", "shapes.Shapes2$Legacy",
       "shapes.full.Full2$Full", "shapes.full.Full2$Inner", "shapes.full.Full2$Plain",
       "shapes.full.Full2$Full$G", "shapes.full.Full2$Full$R",
-      "shapes.ext.Ext2$Base", "shapes.ext.Ext2$Scope", "shapes.ext.Ext2$ReqExt");
+      "shapes.ext.Ext2$Base", "shapes.ext.Ext2$Scope", "shapes.ext.Ext2$ReqExt",
+      "shapes.ext.Ext2$Set", "shapes.ext.Ext2$SetItem");
 
   static Stream<String> messages() {
     return MESSAGES.stream();

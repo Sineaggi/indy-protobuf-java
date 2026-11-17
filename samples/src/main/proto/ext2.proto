@@ -45,3 +45,22 @@ message ReqExt {
 extend ReqExt {
   optional full2.Inner req_inner = 1;
 }
+
+// message_set_wire_format: extensions only, written as MessageSet items (group 1 {type_id, message})
+message Set {
+  option message_set_wire_format = true;
+  extensions 4 to max;
+}
+
+message SetItem {
+  extend Set {
+    optional SetItem item = 4;
+  }
+  optional int32 v = 1;
+  optional string s = 2;
+}
+
+extend Set {
+  optional full2.Inner set_inner = 5;
+  optional SetItem far_item = 2000000000;
+}
