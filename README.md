@@ -51,6 +51,19 @@ The samples build generates its indy classes this way, and `:samples:check` veri
 - `-Dindyproto.stats=true`: print bootstrap and spin timing at exit
 - `-Dindyproto.trace=true`: log each bootstrap
 
+### Developer diagnostics
+
+These help diagnose the runtime itself, like the JDK's own `dumpProxyClassFiles` flags. They are not meant for production.
+
+- `-Dindyproto.dump=DIR` writes every spun hidden class to `DIR/<binary name>.class` (for example `indy/shapes/Point$$Indy$Ops.class`) before defining it, so a class that fails verification is on disk too. Read the classes with `javap -c -p` or a decompiler.
+- In spun code, line numbers are proto field numbers, and the source file names the message. The JVM leaves hidden-class frames out of stack traces by default. Add `-XX:+UnlockDiagnosticVMOptions -XX:+ShowHiddenFrames` to see them:
+
+  ```
+  at indy.shapes.Point$$Indy$Ops/0x0000000046054000.writeTo(Point field:2)
+  ```
+
+  Line 0 is code for no single field, such as extensions or unknown fields. Field numbers above 65535 show as 65535. Debuggers and `StackWalker` with `SHOW_HIDDEN_FRAMES` see the same lines.
+
 `message_set_wire_format` messages hold only extensions, so their `writeTo` and `getSerializedSize` are emitted directly, as protoc does, with no call site to link.
 
 ## Not supported
