@@ -89,21 +89,76 @@ val protocGen by tasks.registering(Exec::class) {
     })
 }
 
-val indyGen by tasks.registering(JavaExec::class) {
+val indyRewrites = listOf("sample=indy.sample", "bench=indy.bench", "wide=indy.wide",
+    "many=indy.many", "shapes=indy.shapes")
+val protoDirs = { listOf(file("src/main/proto"), synthDir.get().asFile, wktDir.get().asFile) }
+val protos = fileTree("src/main/proto") { include("**/*.proto") }.files.map { it.name } + listOf("wide.proto", "many.proto")
+
+// The indy classes come from protoc itself, running the generator as a protoc plugin, the way
+// users run it. A tiny launcher script runs the self-contained plugin jar on the toolchain JVM.
+val pluginJar = project(":generator").tasks.named<Jar>("protocGenJar")
+val pluginLauncher = layout.buildDirectory.file(
+    if (osClassifier.startsWith("windows")) "protoc-gen/protoc-gen-indy.bat" else "protoc-gen/protoc-gen-indy")
+val javaLauncher = javaToolchains.launcherFor { languageVersion.set(JavaLanguageVersion.of(25)) }
+val indyGen by tasks.registering(Exec::class) {
+    dependsOn(protocGen, pluginJar)
+    inputs.files(pluginJar)
+    inputs.dir("src/main/proto")
+    inputs.dir(synthDir)
+    outputs.dir(indyClasses)
+    doFirst {
+        indyClasses.get().asFile.deleteRecursively()
+        indyClasses.get().asFile.mkdirs()
+        val java = javaLauncher.get().executablePath.asFile.absolutePath
+        val jar = pluginJar.get().archiveFile.get().asFile.absolutePath
+        val script = pluginLauncher.get().asFile
+        script.parentFile.mkdirs()
+        if (script.name.endsWith(".bat")) {
+            script.writeText("@\"$java\" -jar \"$jar\" %*\r\n")
+        } else {
+            script.writeText("#!/bin/sh\nexec '$java' -jar '$jar' \"\$@\"\n")
+            script.setExecutable(true)
+        }
+    }
+    executable = protoc.singleFile.absolutePath
+    argumentProviders.add(CommandLineArgumentProvider {
+        protoDirs().flatMap { listOf("-I", it.absolutePath) } +
+            listOf("--plugin=protoc-gen-indy=${pluginLauncher.get().asFile.absolutePath}",
+                "--indy_opt=" + indyRewrites.joinToString(",") { "rewrite=$it" },
+                "--indy_out=${indyClasses.get().asFile.absolutePath}") + protos
+    })
+}
+
+// The descriptor-set CLI must produce byte-identical classes.
+val cliClasses = gen.map { it.dir("cli-classes") }
+val cliGen by tasks.registering(JavaExec::class) {
     dependsOn(protocGen)
     inputs.file(descriptorSet)
     inputs.files(project(":generator").sourceSets["main"].runtimeClasspath)
-    outputs.dir(indyClasses)
+    outputs.dir(cliClasses)
     classpath = project(":generator").sourceSets["main"].runtimeClasspath
     mainClass.set("dev.indyproto.gen.Gen")
-    doFirst { indyClasses.get().asFile.deleteRecursively() }
+    doFirst { cliClasses.get().asFile.deleteRecursively() }
     argumentProviders.add(CommandLineArgumentProvider {
         listOf("--descriptor-set", descriptorSet.get().asFile.absolutePath,
-            "--out", indyClasses.get().asFile.absolutePath,
-            "--rewrite", "sample=indy.sample", "--rewrite", "bench=indy.bench",
-            "--rewrite", "wide=indy.wide", "--rewrite", "many=indy.many", "--rewrite", "shapes=indy.shapes")
+            "--out", cliClasses.get().asFile.absolutePath) +
+            indyRewrites.flatMap { listOf("--rewrite", it) } + protos
     })
 }
+val cliMatchesPlugin by tasks.registering {
+    dependsOn(cliGen, indyGen)
+    inputs.dir(cliClasses)
+    inputs.dir(indyClasses)
+    doLast {
+        fun tree(d: File) = d.walkTopDown().filter { it.isFile }.associate { it.relativeTo(d).invariantSeparatorsPath to it.readBytes() }
+        val a = tree(cliClasses.get().asFile)
+        val b = tree(indyClasses.get().asFile)
+        check(a.keys == b.keys) { "class sets differ: cli-only ${a.keys - b.keys}, plugin-only ${b.keys - a.keys}" }
+        val diff = a.keys.filter { !a[it].contentEquals(b[it]) }
+        check(diff.isEmpty()) { "classes differ between the CLI and the protoc plugin: $diff" }
+    }
+}
+tasks.named("check") { dependsOn(cliMatchesPlugin) }
 
 sourceSets["main"].java.srcDir(protocGen.map { stockJava.get() })
 
@@ -135,5 +190,12 @@ sourceSets["test"].java.srcDirs(compatCopies.map { t -> t.map { it.destinationDi
 tasks.test {
     useJUnitPlatform()
     jvmArgs("-Dindyproto.strategy=${findProperty("strategy") ?: "hidden"}")
+    // PluginTest drives protoc with the plugin launcher that indyGen wrote
+    dependsOn(indyGen)
+    inputs.files(pluginJar)
+    systemProperty("indyproto.protoc", protoc.singleFile.absolutePath)
+    systemProperty("indyproto.plugin", pluginLauncher.get().asFile.absolutePath)
+    systemProperty("indyproto.protoDir", file("src/main/proto").absolutePath)
+    systemProperty("indyproto.indyClasses", indyClasses.get().asFile.absolutePath)
     testLogging { events("failed"); exceptionFormat = org.gradle.api.tasks.testing.logging.TestExceptionFormat.FULL }
 }

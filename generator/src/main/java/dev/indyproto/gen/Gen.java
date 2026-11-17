@@ -41,6 +41,8 @@ import java.util.Set;
  * <pre>
  * java -jar generator.jar --descriptor-set set.pb --out classes/ [--rewrite from.pkg=to.pkg] [file.proto...]
  * </pre>
+ *
+ * <p>The same generator also runs as a protoc plugin: see {@link Plugin}.
  */
 public final class Gen {
 
@@ -86,10 +88,21 @@ public final class Gen {
 
   public static Map<ClassDesc, byte[]> generate(byte[] descriptorSet, Map<String, String> rewrites,
       List<String> only) throws Exception {
-    FileDescriptorSet fds = FileDescriptorSet.parseFrom(descriptorSet);
+    return generate(FileDescriptorSet.parseFrom(descriptorSet).getFileList(), rewrites, only);
+  }
+
+  /**
+   * Generates classes for {@code only} (every non-well-known file when empty). {@code protos}
+   * must list each file after its dependencies, as {@code --include_imports} and a protoc
+   * {@code CodeGeneratorRequest} both do.
+   */
+  public static Map<ClassDesc, byte[]> generate(List<FileDescriptorProto> protos,
+      Map<String, String> rewrites, List<String> only) throws Exception {
     Map<String, FileDescriptor> built = new HashMap<>();
     List<FileDescriptor> files = new ArrayList<>();
-    for (FileDescriptorProto p : fds.getFileList()) {
+    for (FileDescriptorProto p : protos) {
+      // protoc hands plugins source_code_info, but its Java gencode embeds descriptors without it
+      if (p.hasSourceCodeInfo()) p = p.toBuilder().clearSourceCodeInfo().build();
       FileDescriptor[] deps = p.getDependencyList().stream().map(built::get).toArray(FileDescriptor[]::new);
       FileDescriptor fd = FileDescriptor.buildFrom(p, deps);
       built.put(p.getName(), fd);
